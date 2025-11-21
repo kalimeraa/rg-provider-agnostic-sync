@@ -306,11 +306,6 @@ Endpoint'lerin listesi ve kullanımı
 - API endpoint dokümantasyonu (veya Postman collection)
 - Bonus özellikler (varsa)
 
-**Commit History:**
-- Anlamlı commit mesajları
-- Düzenli commit'ler (tek commit'te tüm kod değil)
-- Clean git history
-
 ## Değerlendirme Kriterleri ##
 
 **1. Fonksiyonellik (40%)**
