@@ -1,6 +1,17 @@
 # Veri Senkronizasyon Sistemi - Technical Case
+
+## Başlangıç Adımları
+
+1. Bu repository'yi **fork** edin
+2. Fork ettiğiniz repo'da çalışmalarınızı yapın
+3. Tamamladığınızda bize repository linkini iletin
+4. README.md dosyasına kurulum adımlarını detaylı şekilde ekleyin
+
+**Önemli:** Public repo olarak bırakın ki inceleyebilelim.
+
 ## Genel Bakış
 Bir e-ticaret platformu için 3rd party tedarikçi API'sinden ürün verilerini senkronize eden bir sistem geliştirmeniz bekleniyor. Sistem, periyodik olarak API'den veri çekecek, değişiklikleri tespit edecek ve local database'i güncel tutacak.
+
 ## Senaryo
 Şirketiniz, birden fazla tedarikçiden ürün bilgilerini topluyor. Tedarikçiler kendi API'leri üzerinden ürün bilgilerini (stok, fiyat, açıklama) güncelliyor. Sizin göreviniz bu verileri güvenilir bir şekilde senkronize etmek.
 
@@ -275,15 +286,70 @@ Endpoint'lerin listesi ve kullanımı
 **Bonus Features:** Bonus özellikler zorunlu değildir ancak artı puan getirir.
 
 
-## Değerlendirme Süreci ##
+## Teslim Süreci ##
 
-- Code review
-- Kurulum testi (README talimatları takip edilerek)
-- Fonksiyonel testler (manuel sync, auto sync, error scenarios)
-- Code quality değerlendirmesi
-- Test coverage kontrolü
-- Documentation review
+**Teslim Formatı:**
+- Fork ettiğiniz GitHub repository linki
+- README.md'de kurulum adımları (5 dakikada çalıştırılabilmeli)
+- Çalışan uygulama (local'de test edilmiş olmalı)
 
+**README.md İçermesi Gerekenler:**
+- Kurulum adımları (dependencies, database setup, env config)
+- Çalıştırma komutları (server, queue worker, cron setup)
+- Test koşma talimatları
+- Aldığınız teknik kararlar ve gerekçeleri:
+  - Database tasarımı (index, constraint vb.)
+  - Hash calculation stratejisi
+  - Job uniqueness implementasyonu
+  - Idempotency çözümü
+  - Rate limiting yaklaşımı
+- API endpoint dokümantasyonu (veya Postman collection)
+- Bonus özellikler (varsa)
+
+**Commit History:**
+- Anlamlı commit mesajları
+- Düzenli commit'ler (tek commit'te tüm kod değil)
+- Clean git history
+
+## Değerlendirme Kriterleri ##
+
+**1. Fonksiyonellik (40%)**
+- Sync işlemleri doğru çalışıyor mu?
+- Delta sync hash-based olarak çalışıyor mu?
+- Queue ve retry mekanizması doğru mu?
+- API endpoint'ler düzgün response dönüyor mu?
+- Error handling yeterli mi?
+
+**2. Code Quality (30%)**
+- Clean code principles
+- SOLID principles
+- Design patterns kullanımı
+- Separation of concerns
+- Code organization ve structure
+
+**3. Testing (15%)**
+- Test coverage (%70+ bekleniyor)
+- Kritik senaryolar test edilmiş mi?
+- Test quality (meaningful tests)
+
+**4. Documentation (10%)**
+- README açıklayıcı mı?
+- Kurulum kolay mı?
+- Teknik kararlar dokümante edilmiş mi?
+- API dokümantasyonu var mı?
+
+**5. Database Tasarımı (5%)**
+- Uygun data type seçimi
+- Index stratejisi
+- Constraint'ler doğru mu?
+- Migration quality
+
+**Bonus Puanlar:**
+- Docker setup (+10%)
+- Multiple provider support (+10%)
+- Alerting system (+5%)
+- Integration/E2E tests (+5%)
+- Exceptional code quality (+5%)
 
 ## Sorular? ##
 Case ile ilgili teknik sorularınız varsa lütfen iletişime geçin. Başarılar!
