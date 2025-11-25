@@ -1,14 +1,5 @@
 # Veri Senkronizasyon Sistemi - Technical Case
 
-## Başlangıç Adımları
-
-1. Bu repository'yi **fork** edin
-2. Fork ettiğiniz repo'da çalışmalarınızı yapın
-3. Tamamladığınızda bize repository linkini iletin
-4. README.md dosyasına kurulum adımlarını detaylı şekilde ekleyin
-
-**Önemli:** Public repo olarak bırakın ki inceleyebilelim.
-
 ## Genel Bakış
 Bir e-ticaret platformu için 3rd party tedarikçi API'sinden ürün verilerini senkronize eden bir sistem geliştirmeniz bekleniyor. Sistem, periyodik olarak API'den veri çekecek, değişiklikleri tespit edecek ve local database'i güncel tutacak.
 
