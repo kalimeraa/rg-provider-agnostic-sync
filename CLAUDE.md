@@ -32,7 +32,15 @@ değerlendirme kriterleri için `README.md`'ye bakın.
   dosyalar.
 - Testler, SQLite değil ayrı bir `db_test` MySQL container'ına karşı çalışır
   (`phpunit.xml` → `DB_HOST=db_test`, host port 3307) — üretimle aynı motor,
-  böylece motor-spesifik davranışlar test paketinde gözden kaçmaz
+  böylece motor-spesifik davranışlar test paketinde gözden kaçmaz. Koşum:
+  `docker exec server php artisan test` (ekstra sarmalayıcı script YOK).
+  Bunun doğrudan çalışabilmesinin nedeni: Laravel `APP_ENV=testing` görünce
+  `.env` yerine kök dizindeki `.env.testing`'i okur (`DB_HOST=db_test`,
+  `QUEUE_CONNECTION=sync` vb. hepsi orada) — bunun için `docker-compose.yml`
+  `server`/`worker`/`reverb` servislerinde BİLEREK `env_file: .env` İÇERMEZ;
+  aksi halde container'ın OS ortamı `.env.testing`'in üzerini PHP hiç
+  başlamadan önce sessizce ezerdi (canlı yakalanan bir hataydı, tam döküm
+  `CHANGELOG.md`'de).
 - Unit/Feature testlerinin yanında `tests/Browser/` altında Laravel Dusk +
   headless Chrome ile gerçek bir E2E testi var (dashboard'u gerçek
   tarayıcıda açıp sync tetikleyip Reverb üzerinden gelen canlı güncellemeyi
