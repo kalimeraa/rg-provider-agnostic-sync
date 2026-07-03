@@ -1,0 +1,106 @@
+digraph ProductSyncFlow {
+    rankdir=TB;
+    bgcolor="#ffffff";
+    fontname="Helvetica";
+    node [fontname="Helvetica", fontsize=11, shape=box, style="rounded,filled", margin="0.18,0.12"];
+    edge [fontname="Helvetica", fontsize=9, color="#64748b", fontcolor="#334155"];
+
+    labelloc="t";
+    label=<<FONT POINT-SIZE="18"><B>Product Sync — Mimari Akış</B></FONT><BR/><FONT POINT-SIZE="11" COLOR="#64748b">Tetikleme → Sayfa-Başına-Job Batch → Sonuçlandırma → Alerting/Dashboard</FONT>>;
+
+    subgraph cluster_trigger {
+        label="1. Tetikleme";
+        style="rounded,filled"; color="#e2e8f0"; fillcolor="#f8fafc"; fontcolor="#334155";
+        scheduler [label="Scheduler\n(her 5-10 dk, provider başına)", fillcolor="#dbeafe", color="#93c5fd"];
+        api_trigger [label="POST /api/sync/trigger\n(manuel)", fillcolor="#dbeafe", color="#93c5fd"];
+        sync_provider_job [label="SyncProviderJob\n(ince wrapper)", fillcolor="#bfdbfe", color="#60a5fa"];
+        scheduler -> sync_provider_job;
+        api_trigger -> sync_provider_job;
+    }
+
+    subgraph cluster_coordinator {
+        label="2. SyncRunCoordinator::start()";
+        style="rounded,filled"; color="#fde68a"; fillcolor="#fffbeb"; fontcolor="#78350f";
+        lock_check [label="Cache::lock()\nbu provider için zaten\naktif bir run var mı?", shape=diamond, fillcolor="#fef3c7", color="#f59e0b"];
+        lock_busy [label="Sessizce çık\n(zaten çalışıyor)", fillcolor="#fee2e2", color="#fca5a5"];
+        fetch_page0 [label="fetchPage(0)\ntotalPages öğrenilir", fillcolor="#fef3c7", color="#f59e0b"];
+        page_limit_check [label="totalPages > 50?\n(güvenlik sınırı)", shape=diamond, fillcolor="#fef3c7", color="#f59e0b"];
+        pagination_error [label="PaginationLimitExceededException\nSyncLog=failed + Alert", fillcolor="#fee2e2", color="#fca5a5"];
+        dispatch_batch [label="Bus::batch()\nher sayfa için 1\nFetchProviderPageJob", fillcolor="#fef3c7", color="#f59e0b"];
+
+        lock_check -> lock_busy [label="hayır (kilitli)"];
+        lock_check -> fetch_page0 [label="evet (kilit alındı)"];
+        fetch_page0 -> page_limit_check;
+        page_limit_check -> pagination_error [label="evet"];
+        page_limit_check -> dispatch_batch [label="hayır"];
+    }
+
+    sync_provider_job -> lock_check;
+
+    subgraph cluster_pages {
+        label="3. Paralel Sayfa İşleme (Bus::batch içinde)";
+        style="rounded,filled"; color="#bbf7d0"; fillcolor="#f0fdf4"; fontcolor="#14532d";
+        page_job [label="FetchProviderPageJob\n(tries=3, backoff=1s/2s/4s)", fillcolor="#dcfce7", color="#4ade80"];
+        throttle [label="ThrottledHttpClient\n(Redis: paylaşımlı 5rps\n+ paylaşımlı hata sayacı)", fillcolor="#dcfce7", color="#4ade80"];
+        upsert [label="DeltaSyncService::upsertPage()\nhash karşılaştır → ekle/güncelle", fillcolor="#dcfce7", color="#4ade80"];
+        circuit_check [label="429/hata art arda\n5'e ulaştı mı?", shape=diamond, fillcolor="#dcfce7", color="#4ade80"];
+        circuit_open [label="CircuitBreakerOpenException\nretry'sız kalıcı fail\n(batch iptal olur)", fillcolor="#fee2e2", color="#fca5a5"];
+
+        page_job -> throttle;
+        throttle -> circuit_check;
+        circuit_check -> circuit_open [label="evet"];
+        circuit_check -> upsert [label="hayır"];
+    }
+
+    dispatch_batch -> page_job;
+
+    subgraph cluster_finish {
+        label="4. Sonuçlandırma (batch bitince)";
+        style="rounded,filled"; color="#c7d2fe"; fillcolor="#eef2ff"; fontcolor="#312e81";
+        all_ok [label="TÜM sayfalar\nbaşarılı mı?", shape=diamond, fillcolor="#e0e7ff", color="#818cf8"];
+        then_cb [label="then(): mark-and-sweep\n(last_synced_at eski olanlar\nsoft-delete) + SyncLog=completed", fillcolor="#e0e7ff", color="#818cf8"];
+        catch_cb [label="catch(): sweep YOK\n(eksik veri) + SyncLog=failed", fillcolor="#fee2e2", color="#fca5a5"];
+        release_lock [label="Cache::restoreLock()\nkilidi serbest bırak", fillcolor="#e0e7ff", color="#818cf8"];
+
+        upsert -> all_ok;
+        circuit_open -> all_ok;
+        all_ok -> then_cb [label="evet"];
+        all_ok -> catch_cb [label="hayır (1+ sayfa fail)"];
+        then_cb -> release_lock;
+        catch_cb -> release_lock;
+    }
+
+    pagination_error -> release_lock [style=dashed];
+
+    subgraph cluster_alert {
+        label="5. Alerting & Canlı Dashboard";
+        style="rounded,filled"; color="#fbcfe8"; fillcolor="#fdf2f8"; fontcolor="#831843";
+        alert_service [label="AlertService\n4 eşik: ardışık sync fail (3),\nfailed_jobs (10+), ardışık API\nfail (5), queue backlog (100+)", fillcolor="#fce7f3", color="#f472b6"];
+        alert_log [label="storage/logs/alerts.log\n+ opsiyonel Slack webhook", fillcolor="#fce7f3", color="#f472b6"];
+        reverb [label="Reverb (WebSocket)\nSyncStatusUpdated /\nFailedJobRecorded", fillcolor="#fce7f3", color="#f472b6"];
+        dashboard [label="Dashboard (\"/\")\ncanlı güncellenir,\nrefresh gerekmez", fillcolor="#fce7f3", color="#f472b6"];
+
+        alert_service -> alert_log;
+        reverb -> dashboard [label="ws://"];
+    }
+
+    then_cb -> alert_service [label="recordSyncSuccess\n+ checkQueueBacklog"];
+    catch_cb -> alert_service [label="recordSyncFailure\n(+circuit breaker ise\nrecordCircuitBreakerTripped)"];
+    then_cb -> reverb [label="sync-status.updated\n(completed)"];
+    catch_cb -> reverb [label="sync-status.updated\n(failed)"];
+    sync_provider_job -> reverb [label="sync-status.updated\n(running)", style=dashed];
+
+    subgraph cluster_dlq {
+        label="6. Dead Letter Queue";
+        style="rounded,filled"; color="#fed7aa"; fillcolor="#fff7ed"; fontcolor="#7c2d12";
+        failed_jobs_table [label="failed_jobs tablosu\n(native, +retry_count)", fillcolor="#ffedd5", color="#fb923c"];
+        job_failed_event [label="Laravel JobFailed event\n→ BroadcastFailedJob listener", fillcolor="#ffedd5", color="#fb923c"];
+        retry_endpoint [label="POST /api/sync/retry/{uuid}\n→ queue:retry", fillcolor="#ffedd5", color="#fb923c"];
+
+        failed_jobs_table -> job_failed_event;
+        retry_endpoint -> page_job [label="yeniden kuyruğa\nalınır", style=dashed];
+    }
+
+    circuit_open -> failed_jobs_table [style=dashed];
+    job_failed_event -> reverb [label="failed-job.recorded"];
+}

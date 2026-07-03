@@ -6,6 +6,57 @@ sonuçlarını tarihsel sırayla tutar. Plan dokümanı ileriye dönük "ne
 yapılacak"ı anlatır; bu dosya geriye dönük "ne oldu, ne bulundu, ne
 düzeltildi"yi anlatır.
 
+## Faz 7 — Test Katmanı: iki önemli hata canlı testlerle bulundu
+
+61 test (Unit + Feature + integration/E2E) yazıldı, coverage **%78.26**
+(satır bazında, %70 hedefinin üzerinde). Test yazarken iki gerçek, ciddi
+hata bulundu ve düzeltildi:
+
+1. **`phpunit.xml`'in test-only env override'ları hiç uygulanmıyordu.**
+   `docker-compose.yml`'deki `server`/`worker` container'ları `.env`'i
+   `env_file:` ile içeri alıyor — bu, `QUEUE_CONNECTION=redis`,
+   `DB_HOST=db`, `CACHE_DRIVER=redis` gibi değerleri PHP hiç başlamadan
+   ÖNCE container'ın GERÇEK process ortamına ($_ENV dahil) yazıyor.
+   `phpunit.xml`'in `<env>` etiketi (hatta `force="true"` ile) bunu PHP
+   zaten başladıktan SONRA değiştirmeye çalışıyor — ama Laravel'in
+   `Illuminate\Support\Env` çözümlemesi `$_ENV`'i (zaten container
+   başlangıcında dolu) `putenv()`'den ÖNCE kontrol ediyor. Sonuç: testler
+   sessizce `db_test` yerine gerçek `db`'ye, `sync` yerine `redis` queue
+   ile çalışıyordu (RefreshDatabase'in transaction rollback'i sayesinde
+   kalıcı veri kirlenmesi olmadı, ama mimari tamamen yanlıştı — canlı
+   `config('queue.default')`/`config('app.env')` dump'ları ile doğrulandı).
+   **Çözüm:** `docker/run-tests.sh` ve `docker/run-tests-coverage.sh` —
+   env değişkenlerini `docker exec -e ...` ile, PHP başlamadan ÖNCE set
+   eden script'ler. Bu, `phpunit.xml`'deki `force="true"`'nun YETERSİZ
+   kaldığı, container-seviyeli env'in her zaman kazandığı durumlarda tek
+   güvenilir yöntem.
+
+2. **Mark-and-sweep silme tespiti saat bazlı karşılaştırmayla ~%50
+   ihtimalle yanlış sonuç veriyordu.** `Http::fake()` ile gerçek ağ
+   gecikmesi olmadan art arda çok hızlı çalışan iki sync run'ı, container'ın
+   saat çözünürlüğü yüzünden AYNI mikrosaniyeye denk gelebiliyordu — bu da
+   `last_synced_at < syncRunStartedAt` karşılaştırmasını yanlışlıkla
+   eşitleyip sweep'i atlıyordu (gerçek üretimde asla olmaz, çünkü gerçek
+   API çağrıları arasında her zaman anlamlı gecikme var — sadece testte,
+   sıfır I/O gecikmesiyle ortaya çıkan bir durum). Ayrıca `Eloquent`'in
+   `fromDateTime()`'ının DB'ye varsayılan olarak saniye hassasiyetinde
+   yazdığı (kolon mikrosaniye destekli olsa bile) ayrı bir katman sorunu
+   daha bulundu. **Kalıcı çözüm:** saat yerine monoton bir işaretleyici —
+   `products.last_synced_log_id` (o run'ın `SyncLog.id`'si). Sweep artık
+   `last_synced_log_id <> $currentLogId` karşılaştırıyor; bu, run'lar ne
+   kadar hızlı art arda çalışırsa çalışsın kesin doğru sonuç verir. Ayrıca
+   `SyncController::status()`/`history()`'deki `latest('started_at')`
+   çağrıları da aynı sebeple `latest('id')`'ye çevrildi (aynı saniyeye
+   denk gelen iki log'un yanlışını seçilmesini önlemek için).
+
+Her iki hata da SADECE gerçek entegrasyon testleri (tam
+`SyncRunCoordinator` + `Bus::batch()` zinciri, gerçek Docker ortamı)
+yazılırken ortaya çıkabilecek türdendi — tekil, mock'lu unit testler bu
+sınıftaki hataları asla yakalayamazdı. Testler tam olarak amacına hizmet
+etti: gerçek üretim kodunda var olan, ama bu ana kadar hiçbir canlı
+denemede (bu oturumdaki onlarca manuel tinker/curl testinde bile) ortaya
+çıkmamış iki gerçek kırılganlığı ortaya çıkardı.
+
 ## Sonradan yapılan iyileştirmeler
 
 - **Job/queue isimlendirmesi:** job'lar Laravel'in genel `default`

@@ -442,67 +442,112 @@ cat storage/logs/alerts.log
 
 ---
 
-## Faz 6 — Frontend Dashboard
+## Faz 6 — Frontend Dashboard (Gerçek-Zamanlı, WebSocket-Tabanlı)
 
-**Goal:** Tek sayfalık Blade dashboard; manuel trigger, son sync durumu,
-history tablosu, failed jobs + retry butonu, auto-refresh.
+**Goal:** Tek sayfalık dashboard; manuel trigger, son sync durumu, history
+tablosu, failed jobs + retry butonu. Auto-refresh **polling ile değil**,
+Reverb (WebSocket) üzerinden anlık — kullanıcı hiçbir şeyi elle yenilemek
+zorunda kalmaz.
 
 **Files:**
-- `resources/views/dashboard.blade.php` — Tailwind CDN + vanilla JS
-  `fetch()` ile Faz 4'teki endpoint'lere bağlanır; `setInterval` ile
-  auto-refresh
-- `routes/web.php` — `/` → dashboard view
-- `public/js/dashboard.js` (opsiyonel ayrı dosya, inline de olur — proje
-  build step'i yok)
+- `resources/views/dashboard.blade.php` — Tailwind CDN + pusher-js CDN
+  (Reverb, Pusher protokolünü konuşur); JS/CSS AYRI dosyalarda (blade
+  içine gömülü değil)
+- `public/js/dashboard.js` — tek kaynak state + render fonksiyonları; hem
+  ilk `fetch()` yüklemesi hem canlı socket event'leri AYNI state'i/render
+  yolunu kullanır
+- `public/css/dashboard.css` — Tailwind CDN'in ifade edemediği küçük
+  parçalar (badge/pill/spinner varyantları)
+- `routes/web.php` — `/` (kök URL) → dashboard view
+- `app/Events/SyncStatusUpdated.php` — `ShouldBroadcastNow`, `sync-status`
+  kanalı, `sync-status.updated` adıyla; run başlarken (`running`) VE
+  bitince (`completed`/`failed`) yayınlanır — sadece sonucu değil, "şu an
+  çalışıyor" durumunu da anlık gösterir
+- `app/Events/FailedJobRecorded.php` + `app/Listeners/BroadcastFailedJob.php`
+  — Laravel'in native `JobFailed` event'ini dinleyip failed-jobs tablosunu
+  da polling'siz canlı günceller (hangi job class'ı başarısız olursa olsun
+  tek noktadan yakalanır)
+- `docker/nginx/conf.d/default.conf` — `/app/` altında Reverb'e WebSocket
+  proxy'si (Faz 0'da eklendi, burada tüketiliyor)
 
-**Pattern(s) applied:** Yok — `package.json`/`vite.config.js` CLAUDE.md'de
-zaten "kullanılmayan leftover" olarak işaretli; React/Vue gibi bir framework
-**bilinçli olarak atlandı**, çünkü case'in istediği "basit, fonksiyonel, süslü
-olmayan" tek sayfa için build tooling'in getirdiği karmaşıklık YAGNI.
+**Pattern(s) applied:** Yok yeni — `package.json`/`vite.config.js` CLAUDE.md'de
+zaten "kullanılmayan leftover" olarak işaretli; React/Vue/Echo+npm
+**bilinçli olarak atlandı**, çünkü case'in istediği "basit, fonksiyonel"
+tek sayfa için build tooling'in getirdiği karmaşıklık YAGNI — pusher-js'in
+CDN bundle'ı Reverb ile doğrudan konuşabiliyor, Echo/npm'e gerek yok.
 
-**SOLID:** Uygulanamaz (view katmanı, framework'süz vanilla JS).
+**SOLID:** Uygulanamaz (view/JS katmanı, framework'süz vanilla JS).
 
-**Depends on:** Faz 4 (tüm API endpoint'leri)
+**Depends on:** Faz 4 (tüm API endpoint'leri), Faz 0 (Reverb altyapısı)
 
-**Verification:** Tarayıcıda `http://localhost:8080/` aç, trigger butonuna
-bas, history/failed-jobs tablolarının auto-refresh ile güncellendiğini
-gözle doğrula (mobil genişlikte de responsive olduğunu kontrol et).
+**Verification:** Tarayıcıda `http://localhost:9000/` aç; gerçek bir
+WebSocket client'ı (Node'un native `WebSocket`'i) ile `sync-status`
+kanalına abone olup `/api/sync/trigger` çağrıldığında `sync-status.updated`
+(önce `running`, sonra `completed`) event'lerinin anlık geldiği canlı
+doğrulandı — bkz. CHANGELOG.md.
 
 ---
 
-## Faz 7 — Test Katmanı (%15)
+## Faz 7 — Test Katmanı (%15 + Integration/E2E bonus +%5)
 
-**Goal:** %70+ coverage, README'nin listelediği kritik senaryoların hepsi
-kapsanıyor.
+**Goal:** %70+ coverage (gerçekleşen: **%78.26** satır bazında), case'in
+listelediği kritik senaryoların hepsi kapsanıyor.
 
 **Files:**
-- `tests/Unit/HashServiceTest.php` — aynı input → aynı hash; alan değişince
-  hash değişir; volatile alan (rating) değişince hash **değişmez**
-- `tests/Unit/DeltaSyncServiceTest.php` — yeni ürün ekleniyor, değişen ürün
-  güncelleniyor, değişmeyen ürün dokunulmuyor, provider'da artık olmayan ürün
-  soft-delete ediliyor, tekrar görünürse restore ediliyor
-- `tests/Unit/ThrottledHttpClientTest.php` — 429 sonrası backoff sırası
-  (1s/2s/4s), 5 ardışık hata sonrası circuit breaker exception fırlatıyor
-- `tests/Feature/SyncProviderJobTest.php` — **idempotency**: aynı job 2 kez
-  çalıştırılınca duplicate kayıt oluşmuyor (unique constraint + upsert);
-  aynı provider için eşzamanlı dispatch'te ikinci job kilitleniyor
-- `tests/Feature/Api/SyncControllerTest.php`, `ProductControllerTest.php` —
-  7 endpoint, response zarfı şekli (`success/data/meta/message`), pagination
-  meta'sı, validation hataları
-- `tests/Unit/AlertServiceTest.php` — eşik altı/üstü, throttle penceresi
+- `tests/Unit/Services/Sync/HashServiceTest.php` — aynı input → aynı hash;
+  her alan değişince hash değişir; float/precision normalizasyonu
+- `tests/Unit/Services/Sync/ThrottledHttpClientTest.php` — pacing/rate-limit
+  (gerçek zamanlama ile), 429 exponential backoff (1s/2s/4s, gerçek
+  zamanlama), 5 ardışık hatada circuit breaker, başarı sayaç sıfırlar
+- `tests/Unit/Services/Sync/DeltaSyncServiceTest.php` — yeni/değişen/
+  değişmeyen ürün, soft-delete restore, idempotency, provider izolasyonu
+- `tests/Unit/Services/Alerts/AlertServiceTest.php` — 4 eşik, throttle,
+  farklı provider'ların ayrı sayaçları (gerçek `storage/logs/alerts.log`
+  dosyası okunarak — bu Laravel sürümünde `Log::fake()` yok)
+- `tests/Unit/Services/Providers/{DummyJson,FakeStore}ProviderTest.php` —
+  normalize mantığı, sayfalama matematiği, `fetchOne` bulunamadı durumları
+- `tests/Feature/Api/{Sync,Product,Health}ControllerTest.php` — 7 endpoint,
+  response zarfı, pagination meta, validation hataları, retry akışı
+- `tests/Feature/SyncIdempotencyAndSweepTest.php` — **bonus: integration/E2E**.
+  Gerçek `SyncRunCoordinator` + `Bus::batch()` + `FetchProviderPageJob`
+  zincirinin TAMAMI üzerinden (sadece HTTP katmanı `Http::fake()`):
+  2 sayfalı sync, idempotency, içerik güncelleme, sweep-delete, restore
 
 **Pattern(s) applied:** Yok — test katmanı, önceki fazlardaki DIP sayesinde
 zaten mock'lanabilir (`ProviderClientInterface` sahte implementasyonla
-`bind()` edilebilir, gerçek HTTP çağrısı yapılmaz).
+inşa edilebilir, gerçek HTTP çağrısı yapılmaz).
 
 **SOLID:** Uygulanamaz (test kodu).
 
-**Depends on:** Faz 1-5 (test edilecek her şey)
+**Depends on:** Faz 1-6 (test edilecek her şey)
 
 **Verification:**
 ```
-php artisan test --coverage --min=70
+./docker/run-tests.sh              # hızlı, coverage'sız (~18s, 61 test)
+./docker/run-tests-coverage.sh     # Xdebug ile coverage raporu
 ```
+
+**Önemli — neden `php artisan test` / `./vendor/bin/phpunit` DEĞİL bu
+scriptler:** `docker-compose.yml`'deki `server` container'ı `.env`'i
+`env_file:` ile içeri alıyor, bu da `QUEUE_CONNECTION=redis`,
+`DB_HOST=db` gibi değerleri PHP hiç başlamadan ÖNCE container'ın GERÇEK
+process ortamına yazıyor. `phpunit.xml`'in `<env force="true">` etiketi
+bunu container İÇİNDEN, PHP zaten başladıktan SONRA değiştirmeye çalışıyor
+— ama Laravel'in `env()` çözümlemesi `$_ENV`'i (zaten dolu) `putenv()`'den
+ÖNCE kontrol ediyor, yani `force="true"` tek başına yeterli değil. Bu,
+testler yazılırken canlı olarak yakalandı: testler farkında olmadan
+`db_test` yerine gerçek `db`'ye, `redis` queue ile çalışıyordu (bkz.
+CHANGELOG.md'nin tam anlatımı). `docker exec -e ...` ile env'i PHP
+başlamadan ÖNCE set etmek tek güvenilir çözüm.
+
+**Ayrıca bulunan ve düzeltilen bir eşzamanlılık hatası:** Integration
+testleri yazılırken (`Http::fake()` ile gerçek ağ gecikmesi olmadan),
+mark-and-sweep'in `last_synced_at < syncRunStartedAt` (saat bazlı)
+karşılaştırması, art arda çok hızlı çalışan iki run aynı mikrosaniyeye
+denk gelince ~%50 ihtimalle yanlış sonuç veriyordu. Kalıcı çözüm: saat
+yerine monoton bir `SyncLog.id` (`products.last_synced_log_id`) kullanmak
+— bkz. Faz 2/3'teki `DeltaSyncService`/`SyncRunCoordinator` açıklamaları
+ve CHANGELOG.md.
 
 ---
 
