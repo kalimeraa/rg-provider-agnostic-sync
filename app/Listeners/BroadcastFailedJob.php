@@ -16,11 +16,19 @@ class BroadcastFailedJob
 {
     public function handle(JobFailed $event): void
     {
+        // Named argüman KULLANILMAZ: Dispatchable::dispatch() trait'i
+        // `func_get_args()` ile çalışıyor ve hiç formal parametresi yok
+        // (`public static function dispatch()`) — PHP, parametresiz bir
+        // metoda named argüman geçilince "Unknown named parameter" fatal
+        // hatası fırlatır (bkz. SyncRunCoordinator'daki aynı sınıf hatanın
+        // düzeltmesi, CHANGELOG.md). Bu satır hiç test edilmediği için
+        // production'da fark edilmemişti — her failed job, dashboard'a
+        // broadcast edilmeye çalışılırken sessizce fatal hata veriyordu.
         FailedJobRecorded::dispatch(
-            uuid: $event->job->uuid(),
-            jobClass: $event->job->resolveName(),
-            queue: $event->job->getQueue(),
-            exceptionMessage: $event->exception->getMessage(),
+            $event->job->uuid(),
+            $event->job->resolveName(),
+            $event->job->getQueue(),
+            $event->exception->getMessage(),
         );
     }
 }

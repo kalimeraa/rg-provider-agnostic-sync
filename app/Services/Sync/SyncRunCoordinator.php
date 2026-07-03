@@ -129,12 +129,21 @@ class SyncRunCoordinator
                 'error_message' => $e->getMessage(),
             ]);
 
+            // errorMessage NAMED argüman olarak GEÇİLMEZ: Dispatchable::dispatch()
+            // trait'i `func_get_args()` kullanıyor ve hiç formal parametresi yok
+            // (`public static function dispatch()`) — PHP, parametresi olmayan bir
+            // metoda named argüman geçilince "Unknown named parameter" fatal
+            // hatası fırlatır. Bu, sync fail path'i hiç test edilmediği için
+            // production'da fark edilmemiş gerçek bir hataydı (bkz. CHANGELOG.md).
             SyncStatusUpdated::dispatch(
                 $provider,
                 'failed',
                 $syncRunStartedAt->toIso8601String(),
                 now()->toIso8601String(),
-                errorMessage: $e->getMessage(),
+                0,
+                0,
+                0,
+                $e->getMessage(),
             );
 
             $lock->release();
@@ -235,12 +244,18 @@ class SyncRunCoordinator
         $this->alerts->recordSyncFailure($provider);
         $this->alerts->checkQueueBacklog();
 
+        // errorMessage NAMED argüman olarak GEÇİLMEZ — yukarıdaki start()'taki
+        // aynı düzeltmenin açıklamasına bakın (Dispatchable::dispatch()'ın hiç
+        // formal parametresi yok).
         SyncStatusUpdated::dispatch(
             $provider,
             'failed',
             $log->started_at?->toIso8601String(),
             $completedAt->toIso8601String(),
-            errorMessage: $e->getMessage(),
+            0,
+            0,
+            0,
+            $e->getMessage(),
         );
 
         $this->releaseLock($provider, $lockOwner);
