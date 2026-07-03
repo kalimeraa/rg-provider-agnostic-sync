@@ -58,6 +58,12 @@ docker exec server php artisan migrate
 open http://localhost:8080
 ```
 
+> **Not:** `8080` portu makinenizde zaten kullanılıyorsa (`ERR_CONNECTION_REFUSED`
+> alırsanız), `.env`'deki `APP_PORT` değerini boşta bir porta çevirip
+> (`docker-compose.yml` → `webserver` servisi `'${APP_PORT:-8080}:80'` ile bu
+> değeri okur) `docker compose up -d` komutunu tekrar çalıştırın — bu README'deki
+> tüm `localhost:8080` adresleri, o zaman kendi seçtiğiniz port ile değişir.
+
 Bu kadar. `docker compose up` ile 7 container ayağa kalkar:
 
 | Container | Görev |
