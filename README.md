@@ -536,17 +536,6 @@ docker exec server php -dzend_extension=xdebug.so -dxdebug.mode=coverage vendor/
 docker exec server php artisan test --filter=DeltaSyncServiceTest
 ```
 
-**`php artisan test` neden doğrudan çalışıyor (ekstra script'e gerek yok):**
-Laravel, `APP_ENV=testing` görünce `.env` yerine kök dizindeki
-`.env.testing`'i okur (bkz. [Laravel 10.x testing dokümantasyonu](https://laravel.com/docs/10.x/testing#environment)
-ve [`.env.testing.example`](.env.testing.example)) — `DB_HOST=db_test`,
-`QUEUE_CONNECTION=sync` vb. hepsi orada. Bunun sorunsuz çalışabilmesi için
-`docker-compose.yml`'de `server`/`worker`/`reverb` servislerinde BİLEREK
-`env_file: .env` YOK (o dosyadaki yorum satırına bakın) — aksi halde
-container'ın gerçek OS ortamı, `.env.testing`'in üzerini PHP hiç
-başlamadan önce sessizce ezerdi. Tam teknik döküm (ve bu kök nedene
-ulaşana kadar denenip elenen ara çözümler): [`CHANGELOG.md`](CHANGELOG.md).
-
 Kapsam:
 
 | Test dosyası | İçerik |
