@@ -36,22 +36,34 @@ davranışını da kapsamalı. Bunun üzerine:
   versiyon denendi ama gerçek dev queue (Horizon/Redis) bazen <1 saniyede
   tamamlandığı için bu bir yarış koşuluydu — "Son çalışma" zaman
   damgasının DEĞİŞTİĞİNİ beklemeye çevrildi (daha yavaş ama kesin).
-- **Ayrı bir operasyonel hata bulundu ve düzeltildi:** `composer require
-  --dev laravel/dusk` sadece `server` container'ında çalıştırıldı, ama
-  `docker-compose.yml`'deki `server`/`worker`/`reverb` servislerinin HER
-  BİRİ kendi ayrı (anonim) `vendor/` volume'una sahip — kod (`.`) paylaşılsa
-  da `vendor/` paylaşılmıyor. Bu, `worker`'ın `Horizon`/`schedule:work`
-  süreçlerinin (composer'ın `bootstrap/cache/packages.php`'ye yazdığı,
-  ama `worker`'ın kendi `vendor/`'ında karşılığı olmayan
-  `DuskServiceProvider`'ı bulamayıp) arka planda sessizce fatal hata
-  vermesine yol açtı. Çözüm: `docker exec worker composer install` ve
-  `docker exec reverb composer install` ile üç container'ın `vendor/`'ı
-  senkronize edildi. **Genel kural: yeni bir composer paketi eklendiğinde,
-  `server`/`worker`/`reverb`'in HER BİRİNDE `composer install`
-  çalıştırılmalı** — sadece birinde çalıştırmak yeterli değil.
+- **Ayrı bir operasyonel hata bulundu ve KALICI olarak düzeltildi:**
+  `composer require --dev laravel/dusk` sadece `server` container'ında
+  çalıştırıldı, ama `docker-compose.yml`'deki `server`/`worker`/`reverb`
+  servislerinin HER BİRİ kendi ayrı (anonim) `vendor/` volume'una sahipti
+  — kod (`.`) paylaşılsa da `vendor/` paylaşılmıyordu. Bu, `worker`'ın
+  `Horizon`/`schedule:work` süreçlerinin (composer'ın
+  `bootstrap/cache/packages.php`'ye yazdığı, ama `worker`'ın kendi
+  `vendor/`'ında karşılığı olmayan `DuskServiceProvider`'ı bulamayıp)
+  arka planda sessizce fatal hata vermesine yol açtı. İlk düzeltme
+  (`docker exec worker/reverb composer install`) sadece o ANKİ belirtiyi
+  giderdi — kök neden hâlâ durup duruyordu: bir sonraki `composer
+  require` yine sadece BİR container'ı güncelleyip aynı hatayı
+  tekrarlardı. **Kalıcı çözüm:** `server`/`worker`/`reverb`'in üçü de
+  AYNI image'ın (`server.Dockerfile`) kopyaları olduğu için, üçünün de
+  `vendor/`'ı farklı olmasının hiçbir anlamı yok — anonim volume'lar,
+  isimli/PAYLAŞIMLI tek bir `vendor_data` volume'una çevrildi
+  (`docker-compose.yml`). Artık üç container'dan HERHANGİ BİRİNDE
+  çalıştırılan `composer require`, anında diğer ikisinde de görünür.
+  (Bu volume'u ilk kez oluştururken üç container'ı AYNI ANDA başlatmak
+  Docker'ın "image içeriğini boş volume'a kopyala" mekanizmasında bir
+  yarış koşuluna [`mkdir ... file exists`] yol açtı — `server`'ı tek
+  başına başlatıp volume'u doldurduktan SONRA `worker`/`reverb`'i
+  başlatmak, ya da basitçe `composer install`'ı bir kez tekrar çalıştırıp
+  volume'u tamamlamak bunu çözdü.)
 
 **Verification:** `docker exec server ./vendor/bin/phpunit --configuration=phpunit.dusk.xml`
-— 4 ayrı çalıştırmada stabil (2/2 yeşil).
+— 5 ayrı çalıştırmada stabil (2/2 yeşil), paylaşımlı volume'a geçişten
+SONRA da dahil.
 
 ## Faz 9 — %100'e Yakın Coverage: kök-neden test altyapısı düzeltmesi + 3 gerçek production bug
 

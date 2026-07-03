@@ -37,7 +37,16 @@ services:
     # göremiyordu.
     volumes:
       - '.:/var/www/server'
-      - '/var/www/server/vendor'
+      # PAYLAŞIMLI (isimli) volume — bkz. CHANGELOG.md: server/worker/reverb
+      # ÜÇÜ DE bu image'ın (server.Dockerfile) aynı kopyasını çalıştırıyor,
+      # yani hiçbir zaman farklı bir vendor/'a sahip olmaları anlamlı değil.
+      # Bilerek anonim/ayrı volume'lar KULLANILMAZ: `composer require` sadece
+      # BİRİNDE çalıştırılınca diğer ikisi eski vendor/'da kalıp
+      # `bootstrap/cache/packages.php`'nin (kod ile birlikte paylaşılan) yeni
+      # bir service provider'ı beklemesiyle çakışıyor, arka planda sessizce
+      # fatal hataya yol açıyordu (canlı yakalandı — Horizon/scheduler
+      # `Class "...ServiceProvider" not found`).
+      - 'vendor_data:/var/www/server/vendor'
       - './docker/php/local.ini:/usr/local/etc/php/conf.d/local.ini'
     networks:
       - app-network
@@ -70,7 +79,16 @@ services:
     # göremiyordu.
     volumes:
       - '.:/var/www/server'
-      - '/var/www/server/vendor'
+      # PAYLAŞIMLI (isimli) volume — bkz. CHANGELOG.md: server/worker/reverb
+      # ÜÇÜ DE bu image'ın (server.Dockerfile) aynı kopyasını çalıştırıyor,
+      # yani hiçbir zaman farklı bir vendor/'a sahip olmaları anlamlı değil.
+      # Bilerek anonim/ayrı volume'lar KULLANILMAZ: `composer require` sadece
+      # BİRİNDE çalıştırılınca diğer ikisi eski vendor/'da kalıp
+      # `bootstrap/cache/packages.php`'nin (kod ile birlikte paylaşılan) yeni
+      # bir service provider'ı beklemesiyle çakışıyor, arka planda sessizce
+      # fatal hataya yol açıyordu (canlı yakalandı — Horizon/scheduler
+      # `Class "...ServiceProvider" not found`).
+      - 'vendor_data:/var/www/server/vendor'
       - './docker/php/local.ini:/usr/local/etc/php/conf.d/local.ini'
     networks:
       - app-network
@@ -102,7 +120,16 @@ services:
     # göremiyordu.
     volumes:
       - '.:/var/www/server'
-      - '/var/www/server/vendor'
+      # PAYLAŞIMLI (isimli) volume — bkz. CHANGELOG.md: server/worker/reverb
+      # ÜÇÜ DE bu image'ın (server.Dockerfile) aynı kopyasını çalıştırıyor,
+      # yani hiçbir zaman farklı bir vendor/'a sahip olmaları anlamlı değil.
+      # Bilerek anonim/ayrı volume'lar KULLANILMAZ: `composer require` sadece
+      # BİRİNDE çalıştırılınca diğer ikisi eski vendor/'da kalıp
+      # `bootstrap/cache/packages.php`'nin (kod ile birlikte paylaşılan) yeni
+      # bir service provider'ı beklemesiyle çakışıyor, arka planda sessizce
+      # fatal hataya yol açıyordu (canlı yakalandı — Horizon/scheduler
+      # `Class "...ServiceProvider" not found`).
+      - 'vendor_data:/var/www/server/vendor'
       - './docker/php/local.ini:/usr/local/etc/php/conf.d/local.ini'
     networks:
       - app-network
@@ -182,6 +209,7 @@ services:
 volumes:
   mysql_data:
   mysql_test_data:
+  vendor_data:
 
 networks:
   app-network:
