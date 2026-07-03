@@ -261,18 +261,10 @@ temsil hassasiyeti (`9.990000001` gibi) hash'i gereksiz yere değiştirmesin.
 Case'in istediği "provider bazında aynı anda sadece 1 sync job" kısıtı,
 `SyncProviderJob`'ın `ShouldBeUnique` interface'i ile **değil**,
 `SyncRunCoordinator::start()` içinde elle tutulan bir
-`Cache::lock('product-sync-lock:{provider}', 900)` ile sağlanır.
-
-**Neden `ShouldBeUnique` yetmedi:** `ShouldBeUnique`, tek bir job'un
-ömrüne bağlı bir kilit sağlar. Ama bu mimaride "bir provider'ın sync'i"
-artık tek bir job değil, `SyncProviderJob` + N adet `FetchProviderPageJob`'dan
-oluşan bir `Bus::batch()`'in TAMAMI. `SyncProviderJob` batch'i dispatch
-edip hemen döndüğü için, `ShouldBeUnique` kilidi batch daha bitmeden
-serbest kalırdı — ikinci bir sync bu sırada rahatça başlayabilirdi. Bu
-yüzden kilit elle alınıp, batch'in `then()`/`catch()` callback'lerinden
-(hangisi TETİKLENİRSE, farklı bir process/job içinden) `Cache::restoreLock()`
-ile (owner token taşınarak) serbest bırakılıyor — 900 saniyelik TTL,
-worker kilidi bırakmadan çökerse diye kendiliğinden iyileşme tavanı.
+`Cache::lock('product-sync-lock:{provider}', 900)` ile sağlanır — batch'in
+`then()`/`catch()` callback'lerinden (hangisi tetiklenirse, owner token'ı
+taşınarak `Cache::restoreLock()` ile) serbest bırakılır. 900 saniyelik
+TTL, worker kilidi bırakmadan çökerse diye kendiliğinden iyileşme tavanı.
 
 ### 5.4 Idempotency
 
@@ -339,6 +331,27 @@ ID ise iki run'ı her zaman kesin olarak ayırt eder. Aynı gerekçeyle
 Bir sayfa kalıcı başarısız olup batch iptal edilirse sweep BİLİNÇLİ
 olarak çalıştırılmaz — elimizde uzak listenin sadece bir kısmı olur,
 görülmemiş sayfalardaki ürünleri yanlışlıkla silmiş oluruz.
+
+### 5.7 Sync konfigürasyonu (`config/sync.php`)
+
+Yukarıdaki tüm davranışların (rate limit, job uniqueness TTL, alert
+eşikleri, provider URL'leri) tek toplandığı yer. Her değer bir env
+değişkeninden okunur (bkz. `.env.example`):
+
+| Config key | Env değişkeni | Varsayılan | Ne işe yarar |
+|---|---|---|---|
+| `providers.dummyjson.base_url` | `SYNC_DUMMYJSON_BASE_URL` | `https://dummyjson.com` | DummyJSON API kök adresi |
+| `providers.fakestore.base_url` | `SYNC_FAKESTORE_BASE_URL` | `https://fakestoreapi.com` | FakeStore API kök adresi |
+| `interval_minutes` | `SYNC_INTERVAL_MINUTES` | `5` | Scheduler'ın her provider'ı ne sıklıkta tetiklediği (§4/Kernel) |
+| `rate_limit_per_second` | `SYNC_RATE_LIMIT_PER_SECOND` | `5` | `ThrottledHttpClient`'ın saniyede izin verdiği istek sayısı |
+| `max_consecutive_failures` | `SYNC_MAX_CONSECUTIVE_FAILURES` | `5` | Bu kadar ardışık başarısız istekten sonra circuit breaker açılır |
+| `job_unique_for` | `SYNC_JOB_UNIQUE_FOR` | `900` (sn) | Provider kilidinin TTL'i — worker kilidi bırakmadan çökerse kendiliğinden iyileşme tavanı |
+| `alerts.slack_webhook_url` | `ALERT_SLACK_WEBHOOK_URL` | *(boş)* | Doluysa alert'ler ek olarak buraya `Http::post()` ile gönderilir |
+| `alerts.consecutive_sync_failures` | `ALERT_CONSECUTIVE_SYNC_FAILURES` | `3` | Bir provider'ın ardışık kaç sync başarısızlığı alert üretir |
+| `alerts.failed_job_threshold` | `ALERT_FAILED_JOB_THRESHOLD` | `10` | `failed_jobs` tablosu kaç satıra ulaşınca alert üretir |
+| `alerts.consecutive_api_failures` | `ALERT_CONSECUTIVE_API_FAILURES` | `5` | Circuit breaker tetiklenmesi için alert eşiği (circuit breaker'ın kendi eşiğinden ayrı ayarlanabilir) |
+| `alerts.queue_backlog_threshold` | `ALERT_QUEUE_BACKLOG_THRESHOLD` | `100` | `product-sync` kuyruğunda bekleyen job sayısı eşiği |
+| `alerts.throttle_minutes` | `ALERT_THROTTLE_MINUTES` | `5` | Aynı tip alert'in en az kaç dakikada bir tekrar üretilebileceği |
 
 ---
 
