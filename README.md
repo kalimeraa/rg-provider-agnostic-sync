@@ -32,7 +32,7 @@ teknik kararları ve hata senaryolarında ne olduğunu anlatır.
 | Katman | Teknoloji | Not |
 |---|---|---|
 | Dil / Framework | PHP 8.2, Laravel 10.x | Framework tercihi case'de serbest bırakılmıştı, Laravel seçildi (queue/Horizon/Reverb/test altyapısı hazır) |
-| Veritabanı | MySQL 8 | Hem uygulama (`db`) hem testler (`db_test`) için — **SQLite hiçbir yerde kullanılmıyor**, testler de gerçek MySQL'e karşı koşuyor |
+| Veritabanı | MySQL 8 | Hem uygulama (`db`) hem testler (`db_test`, ayrı container) için — testler de gerçek MySQL'e karşı koşuyor |
 | Cache / Queue / Lock | Redis 7 + Predis | `predis` bilinçli tercih — pure-PHP client, `phpredis` C-extension derlemesi gerektirmiyor, Docker image'ı yalın kalıyor |
 | Queue dashboard | Laravel Horizon | Kuyruk izleme, retry, metrikler |
 | Gerçek zamanlı | Laravel Reverb (WebSocket) | Dashboard'un sıfır-polling canlı güncellemeleri için |
@@ -516,10 +516,10 @@ Kapsam:
 | `tests/Feature/Api/{Sync,Product,Health}ControllerTest.php` | Tüm endpoint'ler, response zarfı |
 | `tests/Feature/SyncIdempotencyAndSweepTest.php` | **Integration/E2E**: gerçek idempotency + mark-and-sweep senaryoları (bonus puan) |
 
-Testler `RefreshDatabase` ile her seferinde `db_test` (MySQL, SQLite
-DEĞİL) üzerinde temiz bir şema kurar — motor-spesifik davranış farkları
-(ör. `decimal` yuvarlama, `timestamp` hassasiyeti) production'da
-yakalanmadan test aşamasında yakalanır.
+Testler `RefreshDatabase` ile her seferinde `db_test` (MySQL) üzerinde
+temiz bir şema kurar — motor-spesifik davranış farkları (ör. `decimal`
+yuvarlama, `timestamp` hassasiyeti) production'da yakalanmadan test
+aşamasında yakalanır.
 
 ---
 
