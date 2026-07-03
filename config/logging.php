@@ -65,6 +65,16 @@ return [
             'replace_placeholders' => true,
         ],
 
+        // AlertService'in structured JSON alert loglarını yazdığı sabit dosya
+        // (storage/logs/alerts.log). Bilerek "daily" DEĞİL "single" — case,
+        // tek/sabit bir dosya adı istiyor, tarih eklenmiş dönen dosyalar değil.
+        'alerts' => [
+            'driver' => 'single',
+            'path' => storage_path('logs/alerts.log'),
+            'level' => 'debug',
+            'replace_placeholders' => true,
+        ],
+
         'daily' => [
             'driver' => 'daily',
             'path' => storage_path('logs/laravel.log'),
