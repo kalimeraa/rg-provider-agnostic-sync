@@ -6,6 +6,112 @@ sonuçlarını tarihsel sırayla tutar. Plan dokümanı ileriye dönük "ne
 yapılacak"ı anlatır; bu dosya geriye dönük "ne oldu, ne bulundu, ne
 düzeltildi"yi anlatır.
 
+## Faz 9 — %100'e Yakın Coverage: kök-neden test altyapısı düzeltmesi + 3 gerçek production bug
+
+Kapsamlı bir coverage/test kalitesi turu: 61 testten **111 teste, 145'ten
+248 assertion'a, %78.26'dan %99.63 satır kapsamına** çıkıldı. Bu tur
+sırasında iki ayrı, önemli altyapı sorunu ve üç gerçek production hatası
+bulundu — hepsi SADECE önceden hiç egzersiz edilmemiş kod yollarını test
+etmeye çalışırken ortaya çıktı.
+
+### 1. `php artisan test`'in doğrudan çalışmaması — kök nedene inildi
+
+Önceki tur (`docker/run-tests.sh`) bunu `docker exec -e VAR=value` ile
+PHP başlamadan önce env değişkenlerini set ederek ÇÖZMÜŞTÜ, ama bu bir
+workaround'du — asıl soru "neden Laravel'in kendi `.env.testing`
+mekanizması çalışmıyor" hiç cevaplanmamıştı. Bu turda tam kök nedene
+inildi:
+
+- PHPUnit'in `<env name="..." force="true"/>` etiketi, kaynağı okunarak
+  (`PHPUnit\TextUI\Configuration\PhpHandler::handleEnvVariables()`)
+  gerçekten hem `putenv()`'i hem `$_ENV`'i günceller ve bu, `bootstrap`
+  dosyası (`vendor/autoload.php`) yüklenmeden ÖNCE olur — yani teoride
+  yeterli olmalıydı.
+- Ama Laravel'in `Illuminate\Support\Env` çözümlemesi (`Dotenv\Repository`
+  adapter zinciri), `$_SERVER`'ı `$_ENV`'den önce/yerine kontrol ediyor —
+  ve `docker-compose.yml`'in `env_file: .env` direktifi `$_SERVER`'ı da
+  (sadece `$_ENV` değil) container başlarken gerçek `.env` değerleriyle
+  dolduruyordu. PHPUnit'in force="true"'su `$_SERVER`'ı GÜNCELLEMİYOR —
+  bu yüzden Laravel hep `$_SERVER`'daki eski/gerçek değeri görüyordu.
+- **Kalıcı çözüm**: `docker-compose.yml`'deki `server`/`worker`/`reverb`
+  servislerinden `env_file: .env` TAMAMEN kaldırıldı. Laravel zaten
+  kendi Dotenv mekanizmasıyla `.env`'i (ya da `APP_ENV=testing` ise
+  `.env.testing`'i, bkz. Laravel 10.x testing dokümantasyonu) her
+  process başlangıcında dosyadan okuyor — container'ın bunu ayrıca OS
+  seviyesinde baked etmesine hiç gerek yoktu, bu sadece PHPUnit'in
+  override'larıyla çakışan bir komplikasyon ekliyordu.
+- `.env.testing` (yeni, Laravel'in native konvansiyonu) + `.env.testing.example`
+  (git'e commit edilen şablon, `.env.testing` `.gitignore`'da) eklendi;
+  `phpunit.xml` sadece `<env name="APP_ENV" value="testing"/>` (force
+  YOK, artık gerek yok) bırakacak şekilde sadeleştirildi.
+- Sonuç: `docker exec server php artisan test` ve `vendor/bin/phpunit`
+  artık HİÇBİR sarmalayıcıya gerek olmadan doğrudan çalışıyor.
+  `docker/run-tests.sh`/`run-tests-coverage.sh` silindi; yerine
+  `composer test`/`composer test:coverage` script'leri eklendi.
+
+### 2. PHPUnit'in mock üretimi + `opcache.enable_cli=1` = SIGSEGV
+
+Yeni yazılan `SyncRunCoordinatorTest` dosyasının TAMAMI (7 test) birlikte
+çalışınca (tek tek veya küçük gruplar halinde çalışınca DEĞİL) container
+`exit 139` (SIGSEGV) ile çöküyordu. Kök neden: PHPUnit'in mock üretimi
+`eval()` ile çok sayıda anonim class tanımlıyor; `opcache.enable_cli=1`
+(daha hızlı `artisan`/`tinker` komutları için bilinçli bir dev-only ayar,
+bkz. `docker/php/local.ini`) bunları AYNI process içinde cache'lemeye
+çalışırken opcache'in kendi içinde bir çakışmaya (segfault) yol
+açıyordu. `-dopcache.enable_cli=0` ile canlı doğrulandı, sonra kalıcı
+olarak `docker/php/local.ini`'de `opcache.enable_cli=0`'a çevrildi — tek
+seferlik CLI process'lerinin opcache'ten kazancı zaten marjinal, riske
+değmiyor.
+
+### 3. Üç gerçek production bug: `Dispatchable::dispatch()`'e named argüman
+
+Laravel'in `Dispatchable` trait'i `public static function dispatch()` —
+**hiç formal parametresi yok**, `func_get_args()` kullanıyor. PHP,
+parametresiz bir metoda named argüman (`dispatch(..., errorMessage: $x)`)
+geçilince **"Unknown named parameter"** fatal hatası fırlatır. Bu üç
+call site'ta bu hata vardı ve hiçbiri test edilmediği için (sync başarısız
+olma yolu ve failed-job broadcast'i, Faz 7'nin 61 testinde bile hiç
+tetiklenmemişti) production'da fark edilmemişti:
+
+- `SyncRunCoordinator::start()`'ın `catch` bloğu (page-0 fetch hatası)
+- `SyncRunCoordinator::finishWithFailure()` (batch iptali)
+- `BroadcastFailedJob::handle()` (her failed job broadcast'i)
+
+Yani: **her sync hatası ve her failed job, dashboard'a bildirilmeye
+çalışılırken sessizce fatal hata veriyordu** — hata zaten oluşmuşken
+üstüne bir de PHP crash'i biniyordu. Üçü de positional argümana çevrildi;
+yeni `SyncRunCoordinatorTest`, `FetchProviderPageJobTest`,
+`BroadcastFailedJobTest` bu yolları artık egzersiz ediyor.
+
+### Diğer değişiklikler
+
+- Tüm test metodları Türkçe snake_case'ten İngilizce camelCase'e çevrildi
+  (`#[Test]` attribute + açıklayıcı isim); her test metoduna ne test
+  ettiğini anlatan Türkçe bir PHPDoc + hangi class/metodu kapsadığını
+  gösteren `@covers` eklendi.
+- Yeni test dosyaları: `ProviderTypeTest`, `FailedJobRecordedTest`,
+  `SyncHistoryClearedTest`, `BroadcastFailedJobTest`, `KernelTest`,
+  `HandlerTest`, `HorizonServiceProviderTest`,
+  `FetchProviderPageJobTest`, `SyncProviderJobTest`,
+  `SyncRunCoordinatorTest` (unit seviyesinde — kilit/pagination-limiti/
+  finalize senaryoları artık integration testinden bağımsız da test
+  ediliyor), `DashboardTest` (Laravel'in anlamsız `ExampleTest`
+  scaffolding'lerinin yerine).
+- `routes/api.php`'deki kullanılmayan `auth:sanctum`/`/user` route'u
+  kaldırıldı (case'in kapsamı dışı, hiçbir yerde token üretilmiyor) —
+  bu, `Authenticate`/`RedirectIfAuthenticated` middleware'lerini
+  anlamsızca "erişilebilir" gösteriyordu.
+- `phpunit.xml`'in `<source>`'una, bu projenin domain'ine ait olmayan
+  (hiç özelleştirilmemiş Laravel iskeleti) `app/Http/Kernel.php`,
+  `app/Http/Middleware/*`, `app/Models/User.php` için bir `<exclude>`
+  eklendi — coverage yüzdesi artık sadece gerçek business logic'i ölçüyor.
+- Kalan %0.37 (`SyncRunCoordinator`'ın batch `then()`/`catch()` closure
+  gövdeleri): davranışsal olarak `SyncIdempotencyAndSweepTest`'in
+  assertion'larıyla kanıtlanmış (bu closure'lar çalışmadan o alanlar hiç
+  set edilemez) ama Laravel'in `SerializableClosure`/`eval()` mekanizması
+  yüzünden Xdebug'ın satır coverage'ı bunu kredilendirmiyor — bilinen bir
+  tooling sınırlaması.
+
 ## Faz 8 — Dokümantasyon & Teslim Hazırlığı
 
 - Case brief `README.md`'den `gereksinimler.md`'ye taşındı (`git mv`), yeni

@@ -48,6 +48,7 @@ teknik kararları ve hata senaryolarında ne olduğunu anlatır.
 git clone <bu-repo>
 cd 2025-product-sync-case
 cp .env.example .env
+cp .env.testing.example .env.testing
 
 docker compose up -d --build
 
@@ -58,11 +59,9 @@ docker exec server php artisan migrate
 open http://localhost:8080
 ```
 
-> **Not:** `8080` portu makinenizde zaten kullanılıyorsa (`ERR_CONNECTION_REFUSED`
-> alırsanız), `.env`'deki `APP_PORT` değerini boşta bir porta çevirip
-> (`docker-compose.yml` → `webserver` servisi `'${APP_PORT:-8080}:80'` ile bu
-> değeri okur) `docker compose up -d` komutunu tekrar çalıştırın — bu README'deki
-> tüm `localhost:8080` adresleri, o zaman kendi seçtiğiniz port ile değişir.
+`.env.testing`, testlerin (`docker exec server php artisan test`) kullandığı
+ayrı ortam dosyasıdır (bkz. §10 Testler) — `.env`'den bağımsızdır, `db_test`/
+`sync` queue/`array` cache gibi test-özel değerleri içerir.
 
 Bu kadar. `docker compose up` ile 7 container ayağa kalkar:
 
@@ -402,6 +401,8 @@ port notuna göre ayarlayın) ve `failed_job_uuid` (bir failed job'ın `uuid`'si
 
 ## 8. Gerçek Zamanlı Dashboard
 
+![Sync Dashboard](docs/dashboard-screenshot.png)
+
 `http://localhost:8080/` — dashboard doğrudan kök URL'de. Sayfa hiç
 yenilenmeden (**sıfır polling**) şunlar canlı güncellenir:
 
@@ -482,46 +483,72 @@ Migration dosyaları: `database/migrations/`. Çalıştırmak için:
 
 ## 10. Testler
 
-**61 test, 145 assertion, %78.26 satır kapsamı** (case gereksinimi: %70+).
+**111 test, 248 assertion, %99.63 satır kapsamı** (case gereksinimi: %70+).
+Test isimleri İngilizce (`#[Test]` attribute'lu, PHPDoc'ları Türkçe); her
+test dosyası/metodu hangi class/metodu kapsadığını `@covers` ile belirtir.
 
 ```bash
-# Normal koşum
-docker/run-tests.sh
+# Normal koşum — container İÇİNDE, sarmalayıcı script YOK
+docker exec server php artisan test
 
-# Coverage raporu (Xdebug ile)
-docker/run-tests-coverage.sh
+# Coverage raporu (Xdebug ile) — composer script veya elle
+docker exec server composer test:coverage
+docker exec server php -dzend_extension=xdebug.so -dxdebug.mode=coverage vendor/bin/phpunit --coverage-text
 
 # Tek bir dosya/filter
-docker/run-tests.sh --filter=DeltaSyncServiceTest
+docker exec server php artisan test --filter=DeltaSyncServiceTest
 ```
 
-**Neden düz `php artisan test` değil, özel bir script:** `docker-compose.yml`'in
-`server` container'ı `.env`'i `env_file:` ile PHP başlamadan ÖNCE içeri
-alıyor; bu, phpunit.xml'in `<env force="true">` etiketinin bile
-ezemeyeceği bir öncelik sırası yaratıyor (Laravel'in `Illuminate\Support\Env`'i
-`$_ENV`'i `putenv()`'den önce kontrol ediyor). `docker/run-tests.sh`,
-test env değişkenlerini (`APP_ENV=testing`, `DB_HOST=db_test`,
-`QUEUE_CONNECTION=sync` vb.) `docker exec -e` ile, PHP başlamadan önce
-set ederek bunu çözer. Tam teknik döküm: [`CHANGELOG.md`](CHANGELOG.md).
+**`php artisan test` neden doğrudan çalışıyor (ekstra script'e gerek yok):**
+Laravel, `APP_ENV=testing` görünce `.env` yerine kök dizindeki
+`.env.testing`'i okur (bkz. [Laravel 10.x testing dokümantasyonu](https://laravel.com/docs/10.x/testing#environment)
+ve [`.env.testing.example`](.env.testing.example)) — `DB_HOST=db_test`,
+`QUEUE_CONNECTION=sync` vb. hepsi orada. Bunun sorunsuz çalışabilmesi için
+`docker-compose.yml`'de `server`/`worker`/`reverb` servislerinde BİLEREK
+`env_file: .env` YOK (o dosyadaki yorum satırına bakın) — aksi halde
+container'ın gerçek OS ortamı, `.env.testing`'in üzerini PHP hiç
+başlamadan önce sessizce ezerdi. Tam teknik döküm (ve bu kök nedene
+ulaşana kadar denenip elenen ara çözümler): [`CHANGELOG.md`](CHANGELOG.md).
 
 Kapsam:
 
 | Test dosyası | İçerik |
 |---|---|
+| `tests/Unit/Enums/ProviderTypeTest.php` | Enum label/value |
+| `tests/Unit/Events/{FailedJobRecorded,SyncHistoryCleared}Test.php` | Broadcast event şekli/kanalı |
+| `tests/Unit/Listeners/BroadcastFailedJobTest.php` | `JobFailed` → `FailedJobRecorded` çevirisi |
+| `tests/Unit/Console/KernelTest.php` | Scheduler'ın gerçekten neyi/nasıl kaydettiği |
+| `tests/Unit/Exceptions/HandlerTest.php` | Her exception tipinin doğru API zarfına çevrilmesi |
+| `tests/Unit/Providers/HorizonServiceProviderTest.php` | `viewHorizon` gate'i |
+| `tests/Unit/Jobs/{FetchProviderPageJob,SyncProviderJob}Test.php` | Batch iptali, circuit breaker → fail(), retry/backoff |
 | `tests/Unit/Services/Sync/HashServiceTest.php` | Hash doğruluğu, alan hariç tutma, normalize |
-| `tests/Unit/Services/Sync/ThrottledHttpClientTest.php` | Rate limiting, 429 backoff, circuit breaker |
+| `tests/Unit/Services/Sync/ThrottledHttpClientTest.php` | Rate limiting, 429/bağlantı hatası backoff'u, circuit breaker |
 | `tests/Unit/Services/Sync/DeltaSyncServiceTest.php` | Ekleme/güncelleme/no-op/idempotency/soft-delete geri getirme |
-| `tests/Unit/Services/Alerts/AlertServiceTest.php` | 4 eşik + throttle + structured JSON log |
+| `tests/Unit/Services/Sync/SyncRunCoordinatorTest.php` | Kilit, pagination limiti, başarı/hata finalizasyonu (unit seviyesinde) |
+| `tests/Unit/Services/Alerts/AlertServiceTest.php` | 4 eşik + throttle + structured JSON log + Slack webhook |
 | `tests/Unit/Services/Providers/{DummyJson,FakeStore}ProviderTest.php` | Provider normalize/sayfalama |
-| `tests/Feature/Api/{Sync,Product,Health}ControllerTest.php` | Tüm endpoint'ler, response zarfı |
+| `tests/Feature/Api/{Sync,Product,Health}ControllerTest.php` | Tüm endpoint'ler (8/8), response zarfı |
+| `tests/Feature/DashboardTest.php` | `/` route'unun dashboard view'ini render etmesi |
 | `tests/Feature/SyncIdempotencyAndSweepTest.php` | **Integration/E2E**: gerçek idempotency + mark-and-sweep senaryoları (bonus puan) |
 
 Testler `RefreshDatabase` ile her seferinde `db_test` (MySQL) üzerinde
 temiz bir şema kurar — motor-spesifik davranış farkları (ör. `decimal`
 yuvarlama, `timestamp` hassasiyeti) production'da yakalanmadan test
-aşamasında yakalanır.
+aşamasında yakalanır. Coverage `<source><exclude>` ile `app/Http/Kernel.php`,
+`app/Http/Middleware/*` ve `app/Models/User.php`'ı kapsam dışı bırakır —
+bunlar bu projenin domain'ine (product sync) ait olmayan, hiç
+özelleştirilmemiş Laravel iskelet dosyaları (case'in API'si Sanctum/auth
+kullanmıyor).
 
----
+**Kalan %0.37 (2 satır):** `SyncRunCoordinator::start()`'taki
+`Bus::batch()->then()`/`catch()` closure gövdeleri (`finishSuccessfully()`/
+`finishWithFailure()`'ı çağıran tek satırlık kapanışlar). Bu satırların
+GERÇEKTEN çalıştığı `SyncIdempotencyAndSweepTest`'in doğrudan
+assertion'larıyla kanıtlanmıştır (`sync_logs.status`/`products_added` gibi
+alanlar SADECE bu closure'lar çalışınca set edilir) — ama Laravel'in
+batch callback'leri `SerializableClosure` ile serialize/`eval()` edilip
+geri kurulduğu için Xdebug'ın satır bazlı coverage'ı bunu kredilendirmiyor;
+bilinen bir tooling sınırlaması, gerçek bir test boşluğu değil.
 
 ## 11. Bonus Özellikler
 
@@ -566,8 +593,9 @@ app/
     └── Sync/{HashService,DeltaSyncService,SyncRunCoordinator,ThrottledHttpClient}.php
 
 database/migrations/       — products, sync_logs, failed_jobs(+retry_count), job_batches
-docker/                     — server.Dockerfile, nginx conf, supervisord conf, run-tests*.sh
+docker/                     — server.Dockerfile, nginx conf, supervisord conf
 docs/                       — IMPLEMENTATION_PLAN.md, architecture-flow.{dot,png}
+.env.testing / .env.testing.example — testler için Laravel'in native env dosyası
 public/{js,css}/dashboard.* — dashboard'un ayrı JS/CSS dosyaları
 resources/views/dashboard.blade.php
 tests/{Unit,Feature}/

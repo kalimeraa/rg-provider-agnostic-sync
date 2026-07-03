@@ -490,28 +490,12 @@ doğrulandı — bkz. CHANGELOG.md.
 
 ## Faz 7 — Test Katmanı (%15 + Integration/E2E bonus +%5)
 
-**Goal:** %70+ coverage (gerçekleşen: **%78.26** satır bazında), case'in
-listelediği kritik senaryoların hepsi kapsanıyor.
+**Goal:** %70+ coverage. Gerçekleşen (Faz 9'daki ikinci turdan sonraki
+son hal): **111 test, 248 assertion, %99.63 satır kapsamı**.
 
-**Files:**
-- `tests/Unit/Services/Sync/HashServiceTest.php` — aynı input → aynı hash;
-  her alan değişince hash değişir; float/precision normalizasyonu
-- `tests/Unit/Services/Sync/ThrottledHttpClientTest.php` — pacing/rate-limit
-  (gerçek zamanlama ile), 429 exponential backoff (1s/2s/4s, gerçek
-  zamanlama), 5 ardışık hatada circuit breaker, başarı sayaç sıfırlar
-- `tests/Unit/Services/Sync/DeltaSyncServiceTest.php` — yeni/değişen/
-  değişmeyen ürün, soft-delete restore, idempotency, provider izolasyonu
-- `tests/Unit/Services/Alerts/AlertServiceTest.php` — 4 eşik, throttle,
-  farklı provider'ların ayrı sayaçları (gerçek `storage/logs/alerts.log`
-  dosyası okunarak — bu Laravel sürümünde `Log::fake()` yok)
-- `tests/Unit/Services/Providers/{DummyJson,FakeStore}ProviderTest.php` —
-  normalize mantığı, sayfalama matematiği, `fetchOne` bulunamadı durumları
-- `tests/Feature/Api/{Sync,Product,Health}ControllerTest.php` — 7 endpoint,
-  response zarfı, pagination meta, validation hataları, retry akışı
-- `tests/Feature/SyncIdempotencyAndSweepTest.php` — **bonus: integration/E2E**.
-  Gerçek `SyncRunCoordinator` + `Bus::batch()` + `FetchProviderPageJob`
-  zincirinin TAMAMI üzerinden (sadece HTTP katmanı `Http::fake()`):
-  2 sayfalı sync, idempotency, içerik güncelleme, sweep-delete, restore
+**Files:** `tests/Unit/**` ve `tests/Feature/**` — tam liste ve her
+dosyanın içeriği için README.md §10'a bakın (bu plan dosyasını tekrar
+etmemek için).
 
 **Pattern(s) applied:** Yok — test katmanı, önceki fazlardaki DIP sayesinde
 zaten mock'lanabilir (`ProviderClientInterface` sahte implementasyonla
@@ -523,22 +507,9 @@ inşa edilebilir, gerçek HTTP çağrısı yapılmaz).
 
 **Verification:**
 ```
-./docker/run-tests.sh              # hızlı, coverage'sız (~18s, 61 test)
-./docker/run-tests-coverage.sh     # Xdebug ile coverage raporu
+docker exec server php artisan test              # sarmalayıcıya gerek yok
+docker exec server composer test:coverage         # Xdebug ile coverage raporu
 ```
-
-**Önemli — neden `php artisan test` / `./vendor/bin/phpunit` DEĞİL bu
-scriptler:** `docker-compose.yml`'deki `server` container'ı `.env`'i
-`env_file:` ile içeri alıyor, bu da `QUEUE_CONNECTION=redis`,
-`DB_HOST=db` gibi değerleri PHP hiç başlamadan ÖNCE container'ın GERÇEK
-process ortamına yazıyor. `phpunit.xml`'in `<env force="true">` etiketi
-bunu container İÇİNDEN, PHP zaten başladıktan SONRA değiştirmeye çalışıyor
-— ama Laravel'in `env()` çözümlemesi `$_ENV`'i (zaten dolu) `putenv()`'den
-ÖNCE kontrol ediyor, yani `force="true"` tek başına yeterli değil. Bu,
-testler yazılırken canlı olarak yakalandı: testler farkında olmadan
-`db_test` yerine gerçek `db`'ye, `redis` queue ile çalışıyordu (bkz.
-CHANGELOG.md'nin tam anlatımı). `docker exec -e ...` ile env'i PHP
-başlamadan ÖNCE set etmek tek güvenilir çözüm.
 
 **Ayrıca bulunan ve düzeltilen bir eşzamanlılık hatası:** Integration
 testleri yazılırken (`Http::fake()` ile gerçek ağ gecikmesi olmadan),
@@ -548,6 +519,42 @@ denk gelince ~%50 ihtimalle yanlış sonuç veriyordu. Kalıcı çözüm: saat
 yerine monoton bir `SyncLog.id` (`products.last_synced_log_id`) kullanmak
 — bkz. Faz 2/3'teki `DeltaSyncService`/`SyncRunCoordinator` açıklamaları
 ve CHANGELOG.md.
+
+---
+
+## Faz 9 — Coverage'ı %99.63'e Çıkarma: kök-neden test altyapısı + 3 gerçek bug
+
+**Goal:** Case'in %70 hedefinin çok üzerine çıkmak, İngilizce test isimleri
++ `@covers` ile okunabilirlik, ve `php artisan test`'in HİÇBİR sarmalayıcıya
+gerek kalmadan doğrudan çalışması.
+
+**Gerçekleşen:**
+- `docker-compose.yml`'den `env_file: .env` kaldırıldı (server/worker/reverb);
+  Laravel'in native `.env.testing` mekanizması artık sorunsuz çalışıyor —
+  `docker/run-tests*.sh` sarmalayıcıları GEREKSİZ hale gelip silindi.
+- `docker/php/local.ini`'de `opcache.enable_cli=1` → `0`: PHPUnit'in mock
+  üretimi (`eval()` ile çok sayıda anonim class) opcache CLI modunda
+  segfault'a yol açıyordu (canlı doğrulandı).
+- Üç gerçek production bug bulundu ve düzeltildi: `Dispatchable::dispatch()`
+  hiç formal parametresi olmadığı için named argüman kabul etmiyor —
+  `SyncRunCoordinator`'ın 2 call site'ı ve `BroadcastFailedJob::handle()`
+  bunu ihlal ediyordu (her sync hatası/failed job broadcast'i fatal hata
+  veriyordu, hiç test edilmediği için fark edilmemişti).
+- Tüm test metodları İngilizce'ye çevrildi, her metoda ne test ettiğini
+  açıklayan PHPDoc + `@covers` eklendi. `SyncRunCoordinator` için dedike
+  bir unit test dosyası eklendi (önceden sadece integration testinden
+  dolaylı test ediliyordu).
+- `phpunit.xml`'in `<source>`'una domain'e ait olmayan Laravel iskelet
+  dosyaları (`Http/Kernel.php`, `Http/Middleware/*`, `Models/User.php`)
+  için `<exclude>` eklendi; kullanılmayan `/user` Sanctum route'u silindi.
+
+Tam teknik döküm (her üç bug'ın nasıl bulunduğu dahil): CHANGELOG.md.
+
+**Depends on:** Faz 7 (üzerine inşa edilen tur)
+
+**Verification:** `docker exec server php artisan test` — 111/111 yeşil,
+5 ayrı çalıştırmada stabil. `docker exec server composer test:coverage` —
+%99.63 satır kapsamı.
 
 ---
 
