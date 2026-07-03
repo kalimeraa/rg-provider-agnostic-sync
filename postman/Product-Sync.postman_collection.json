@@ -1,0 +1,196 @@
+{
+	"info": {
+		"name": "Product Sync API",
+		"description": "DummyJSON + FakeStore delta sync sistemi için case'in istediği 7 endpoint. Tüm response'lar ApiResponseTrait zarfını kullanır: {success, data, meta, message} / {success:false, error:{code, message}}. Ayrıntılı mimari/karar dokümantasyonu için README.md'ye bakın. base_url environment değişkeni varsayılan http://localhost:8080 — .env'inizde APP_PORT değiştirdiyseniz environment'ta da güncelleyin.",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"variable": [
+		{
+			"key": "base_url",
+			"value": "http://localhost:8080",
+			"type": "string"
+		},
+		{
+			"key": "failed_job_uuid",
+			"value": "",
+			"type": "string",
+			"description": "GET /api/sync/failed-jobs response'undaki bir satırın `uuid` alanından doldurun (numeric `id` DEĞİL)."
+		}
+	],
+	"item": [
+		{
+			"name": "Sync",
+			"item": [
+				{
+					"name": "Trigger Sync — DummyJSON",
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Content-Type", "value": "application/json" },
+							{ "key": "Accept", "value": "application/json" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"provider\": \"dummyjson\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/sync/trigger",
+							"host": ["{{base_url}}"],
+							"path": ["api", "sync", "trigger"]
+						},
+						"description": "Manuel sync başlatır (202). Provider için zaten aktif bir run varsa SyncRunCoordinator'ın kilidi yüzünden sessizce hiçbir şey yapmaz — gerçek durumu GET /api/sync/status gösterir."
+					},
+					"response": []
+				},
+				{
+					"name": "Trigger Sync — FakeStore",
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Content-Type", "value": "application/json" },
+							{ "key": "Accept", "value": "application/json" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"provider\": \"fakestore\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/sync/trigger",
+							"host": ["{{base_url}}"],
+							"path": ["api", "sync", "trigger"]
+						},
+						"description": "Manuel sync başlatır (202). Provider için zaten aktif bir run varsa SyncRunCoordinator'ın kilidi yüzünden sessizce hiçbir şey yapmaz — gerçek durumu GET /api/sync/status gösterir."
+					},
+					"response": []
+				},
+				{
+					"name": "Get Sync Status",
+					"request": {
+						"method": "GET",
+						"header": [
+							{ "key": "Accept", "value": "application/json" }
+						],
+						"url": {
+							"raw": "{{base_url}}/api/sync/status",
+							"host": ["{{base_url}}"],
+							"path": ["api", "sync", "status"]
+						},
+						"description": "Her iki provider için: şu an aktif bir sync çalışıp çalışmadığı ve en son tamamlanan/başarısız sync bilgisi (SyncLogResource)."
+					},
+					"response": []
+				},
+				{
+					"name": "Get Sync History",
+					"request": {
+						"method": "GET",
+						"header": [
+							{ "key": "Accept", "value": "application/json" }
+						],
+						"url": {
+							"raw": "{{base_url}}/api/sync/history?per_page=10&provider=dummyjson",
+							"host": ["{{base_url}}"],
+							"path": ["api", "sync", "history"],
+							"query": [
+								{ "key": "per_page", "value": "10" },
+								{
+									"key": "provider",
+									"value": "dummyjson",
+									"description": "Opsiyonel — kaldırılırsa her iki provider'ın geçmişi birlikte döner.",
+									"disabled": false
+								}
+							]
+						},
+						"description": "Geçmiş sync_logs kayıtları, en yeniden eskiye, sayfalı (meta: page/per_page/total)."
+					},
+					"response": []
+				},
+				{
+					"name": "Get Failed Jobs",
+					"request": {
+						"method": "GET",
+						"header": [
+							{ "key": "Accept", "value": "application/json" }
+						],
+						"url": {
+							"raw": "{{base_url}}/api/sync/failed-jobs?per_page=10",
+							"host": ["{{base_url}}"],
+							"path": ["api", "sync", "failed-jobs"],
+							"query": [
+								{ "key": "per_page", "value": "10" }
+							]
+						},
+						"description": "Laravel'in native failed_jobs tablosu (DLQ), en yeniden eskiye, sayfalı. Bir satırın `uuid` alanını failed_job_uuid değişkenine kopyalayıp aşağıdaki Retry isteğini kullanın."
+					},
+					"response": []
+				},
+				{
+					"name": "Retry Failed Job",
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Accept", "value": "application/json" }
+						],
+						"url": {
+							"raw": "{{base_url}}/api/sync/retry/{{failed_job_uuid}}",
+							"host": ["{{base_url}}"],
+							"path": ["api", "sync", "retry", "{{failed_job_uuid}}"]
+						},
+						"description": "{jobId} = failed_jobs.uuid (numeric id DEĞİL, QUEUE_FAILED_DRIVER=database-uuids kullanıldığı için). Job'u queue:retry ile tekrar kuyruğa alır."
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "Products",
+			"item": [
+				{
+					"name": "List Products",
+					"request": {
+						"method": "GET",
+						"header": [
+							{ "key": "Accept", "value": "application/json" }
+						],
+						"url": {
+							"raw": "{{base_url}}/api/products?per_page=20&provider=dummyjson",
+							"host": ["{{base_url}}"],
+							"path": ["api", "products"],
+							"query": [
+								{ "key": "per_page", "value": "20" },
+								{
+									"key": "provider",
+									"value": "dummyjson",
+									"description": "Opsiyonel — kaldırılırsa her iki provider'ın aktif (silinmemiş) ürünleri birlikte döner.",
+									"disabled": false
+								}
+							]
+						},
+						"description": "Local, aktif (soft-delete edilmemiş) ürünler, en son senkronize edilene göre sıralı, sayfalı (ProductResource)."
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "Health",
+			"item": [
+				{
+					"name": "Health Check",
+					"request": {
+						"method": "GET",
+						"header": [
+							{ "key": "Accept", "value": "application/json" }
+						],
+						"url": {
+							"raw": "{{base_url}}/api/health",
+							"host": ["{{base_url}}"],
+							"path": ["api", "health"]
+						},
+						"description": "DB ve Redis bağlantısını canlı ping ile kontrol eder. İkisi de sağlıklıysa 200 + status:ok, biri bile başarısızsa 503 + status:degraded."
+					},
+					"response": []
+				}
+			]
+		}
+	]
+}

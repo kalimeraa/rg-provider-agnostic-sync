@@ -388,6 +388,15 @@ curl http://localhost:8080/api/sync/status | jq
 curl "http://localhost:8080/api/products?provider=dummyjson&per_page=5" | jq
 ```
 
+### Postman collection
+
+[`postman/Product-Sync.postman_collection.json`](postman/Product-Sync.postman_collection.json)
+— yukarıdaki 7 endpoint'in tamamı, gruplu (Sync/Products/Health) ve
+açıklamalı. [`postman/Product-Sync.postman_environment.json`](postman/Product-Sync.postman_environment.json)
+ile birlikte Postman'e import edin; `base_url` (varsayılan `:8080`, §2'deki
+port notuna göre ayarlayın) ve `failed_job_uuid` (bir failed job'ın `uuid`'si
+— retry isteği için) değişkenlerini environment'tan düzenleyebilirsiniz.
+
 ---
 
 ## 8. Gerçek Zamanlı Dashboard
@@ -569,5 +578,6 @@ gereksinimler.md              — orijinal case brief
 - `MAX_PAGES = 50` sabit bir güvenlik sınırı; gerçek bir provider'ın
   50'den fazla sayfası olması gerekirse `SyncRunCoordinator::MAX_PAGES`
   artırılmalı.
-- Postman collection eklenmedi (case'de opsiyonel) — §7'deki curl
-  örnekleri ve `routes/api.php` API'nin tamamını kapsar.
+- Postman collection'daki `Retry Failed Job` isteği, `failed_job_uuid`
+  değişkeninin elle (bir `failed-jobs` yanıtından) doldurulmasını bekler —
+  otomatik zincirleme (ör. bir test script'iyle önceki yanıttan çekme) yok.
