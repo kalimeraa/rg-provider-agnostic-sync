@@ -6,6 +6,53 @@ sonuçlarını tarihsel sırayla tutar. Plan dokümanı ileriye dönük "ne
 yapılacak"ı anlatır; bu dosya geriye dönük "ne oldu, ne bulundu, ne
 düzeltildi"yi anlatır.
 
+## Faz 10 — Gerçek E2E test (Laravel Dusk): "Integration" ile "E2E" aynı şey değil
+
+Kullanıcı geri bildirimi: `SyncIdempotencyAndSweepTest`'i "Integration/E2E"
+diye etiketlemek yanlıştı — o test PHP katmanları arasında gerçek bir
+zincirdir (sadece HTTP fake) ama tarayıcıyı/JS'i hiç çalıştırmaz. Gerçek
+E2E, sayfa render'ı + kullanıcı etkileşimi + (bu projede) WebSocket
+davranışını da kapsamalı. Bunun üzerine:
+
+- `laravel/dusk` eklendi, headless Chrome için `docker-compose.yml`'e
+  ayrı bir `selenium` (`selenium/standalone-chrome`) container'ı eklendi
+  (`platform: linux/amd64` ile — resmi image Apple Silicon/arm64 için
+  yayınlanmıyor, Docker Desktop'ın Rosetta emülasyonu kullanılıyor).
+- `tests/DuskTestCase.php`: `driver()` yerel bir ChromeDriver process'i
+  başlatmak yerine `selenium` container'ına bağlanacak, `baseUrl()` ise
+  `config('app.url')` (host'ta `localhost:8080`) yerine `http://webserver`
+  (docker-network hostname) dönecek şekilde override edildi — tarayıcı
+  `selenium` container'ında çalıştığı için host'un portuna değil, AYNI
+  docker ağındaki nginx'e doğrudan erişiyor.
+- `tests/Browser/DashboardSyncTest.php`: dashboard'u GERÇEK stack'e
+  (mock/fake YOK — nginx → php-fpm → gerçek DummyJSON API → MySQL →
+  Redis → Reverb) karşı açar, "Şimdi Senkronize Et"e basar, "Son çalışma"
+  zaman damgasının sayfa hiç yenilenmeden WebSocket push'iyle
+  güncellendiğini doğrular. `public/js/dashboard.js`'e bu testin güvenilir
+  çalışabilmesi için `data-status-card-for`/`data-status-pill-for`/
+  `data-last-sync-for` attribute'ları eklendi (kırılgan metin
+  seçicilerinden kaçınmak için).
+- İlk yazımda buton'un ANLIK "disabled" anını yakalamaya çalışan bir
+  versiyon denendi ama gerçek dev queue (Horizon/Redis) bazen <1 saniyede
+  tamamlandığı için bu bir yarış koşuluydu — "Son çalışma" zaman
+  damgasının DEĞİŞTİĞİNİ beklemeye çevrildi (daha yavaş ama kesin).
+- **Ayrı bir operasyonel hata bulundu ve düzeltildi:** `composer require
+  --dev laravel/dusk` sadece `server` container'ında çalıştırıldı, ama
+  `docker-compose.yml`'deki `server`/`worker`/`reverb` servislerinin HER
+  BİRİ kendi ayrı (anonim) `vendor/` volume'una sahip — kod (`.`) paylaşılsa
+  da `vendor/` paylaşılmıyor. Bu, `worker`'ın `Horizon`/`schedule:work`
+  süreçlerinin (composer'ın `bootstrap/cache/packages.php`'ye yazdığı,
+  ama `worker`'ın kendi `vendor/`'ında karşılığı olmayan
+  `DuskServiceProvider`'ı bulamayıp) arka planda sessizce fatal hata
+  vermesine yol açtı. Çözüm: `docker exec worker composer install` ve
+  `docker exec reverb composer install` ile üç container'ın `vendor/`'ı
+  senkronize edildi. **Genel kural: yeni bir composer paketi eklendiğinde,
+  `server`/`worker`/`reverb`'in HER BİRİNDE `composer install`
+  çalıştırılmalı** — sadece birinde çalıştırmak yeterli değil.
+
+**Verification:** `docker exec server ./vendor/bin/phpunit --configuration=phpunit.dusk.xml`
+— 4 ayrı çalıştırmada stabil (2/2 yeşil).
+
 ## Faz 9 — %100'e Yakın Coverage: kök-neden test altyapısı düzeltmesi + 3 gerçek production bug
 
 Kapsamlı bir coverage/test kalitesi turu: 61 testten **111 teste, 145'ten

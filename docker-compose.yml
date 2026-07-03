@@ -160,6 +160,25 @@ services:
     networks:
       - app-network
 
+  # Laravel Dusk (bkz. tests/Browser/) için headless Chrome + WebDriver.
+  # Yerel bir chromedriver process'i YOK — DuskTestCase::driver(), bu
+  # container'a Selenium'un standart WebDriver protokolüyle bağlanır.
+  # Dusk testleri GERÇEK stack'e (webserver → server → db → redis →
+  # reverb) karşı çalışır — mock/fake YOK, "E2E" isminin gerektirdiği gibi
+  # tarayıcıda gerçek bir sayfa render edilip gerçek bir WebSocket
+  # bağlantısı kuruluyor.
+  selenium:
+    container_name: selenium
+    image: selenium/standalone-chrome:latest
+    # Resmi Selenium image'ı şu an arm64 (Apple Silicon) için yayınlanmıyor —
+    # `platform: linux/amd64` ile Docker Desktop'ın emülasyonu (Rosetta)
+    # üzerinden çalıştırılıyor. amd64 host'larda (ör. CI, Linux sunucu) bu
+    # zaten native'dir, ek bir maliyeti yok.
+    platform: linux/amd64
+    shm_size: 2gb
+    networks:
+      - app-network
+
 volumes:
   mysql_data:
   mysql_test_data:

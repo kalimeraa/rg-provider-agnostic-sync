@@ -126,12 +126,12 @@
             : '<p class="text-slate-400 text-xs mt-1">Sonraki otomatik sync: <span class="countdown-value font-mono" data-countdown-for="' + p.provider + '">--:--</span></p>';
 
         return ''
-            + '<div class="status-card">'
+            + '<div class="status-card" data-status-card-for="' + p.provider + '">'
             + '  <div class="flex items-center justify-between">'
             + '    <h3 class="font-semibold">' + (PROVIDER_LABELS[p.provider] || p.provider) + '</h3>'
-            + '    <span class="status-pill ' + statusPillClass(effectiveStatus) + '">' + statusLabel(effectiveStatus) + '</span>'
+            + '    <span class="status-pill ' + statusPillClass(effectiveStatus) + '" data-status-pill-for="' + p.provider + '">' + statusLabel(effectiveStatus) + '</span>'
             + '  </div>'
-            + '  <p class="text-slate-400 text-xs mt-1">Son çalışma: ' + lastSeenAt + '</p>'
+            + '  <p class="text-slate-400 text-xs mt-1" data-last-sync-for="' + p.provider + '">Son çalışma: ' + lastSeenAt + '</p>'
             +    countdownLine
             +    stats
             +    errorLine

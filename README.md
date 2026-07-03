@@ -37,7 +37,8 @@ teknik kararları ve hata senaryolarında ne olduğunu anlatır.
 | Gerçek zamanlı | Laravel Reverb (WebSocket) | Dashboard'un sıfır-polling canlı güncellemeleri için |
 | Frontend | Blade + Vanilla JS + Tailwind (CDN) | Build adımı yok; `package.json`/`vite.config.js` iskeletten kalma, kullanılmıyor |
 | Container | Docker Compose | 7 servis: `webserver`, `server`, `worker`, `reverb`, `db`, `db_test`, `redis` |
-| Test | PHPUnit 10 | MySQL (`db_test`) container'ına karşı, Xdebug ile coverage ölçümü |
+| Test | PHPUnit 10 | Unit/Feature/Integration — MySQL (`db_test`) container'ına karşı, Xdebug ile coverage ölçümü |
+| E2E test | Laravel Dusk + headless Chrome | Ayrı, opsiyonel `selenium` container'ı — gerçek tarayıcıda dashboard'u test eder (bkz. §10) |
 
 ---
 
@@ -541,7 +542,35 @@ Kapsam:
 | `tests/Unit/Services/Providers/{DummyJson,FakeStore}ProviderTest.php` | Provider normalize/sayfalama |
 | `tests/Feature/Api/{Sync,Product,Health}ControllerTest.php` | Tüm endpoint'ler (8/8), response zarfı |
 | `tests/Feature/DashboardTest.php` | `/` route'unun dashboard view'ini render etmesi |
-| `tests/Feature/SyncIdempotencyAndSweepTest.php` | **Integration/E2E**: gerçek idempotency + mark-and-sweep senaryoları (bonus puan) |
+| `tests/Feature/SyncIdempotencyAndSweepTest.php` | **Integration test**: gerçek idempotency + mark-and-sweep senaryoları, PHP katmanları arası tam zincir (sadece HTTP fake) — bonus puan |
+| `tests/Browser/DashboardSyncTest.php` | **E2E test** (Laravel Dusk + headless Chrome): aşağıya bakın |
+
+### E2E testleri (Laravel Dusk)
+
+Yukarıdaki integration testi PHP katmanları arasında gerçek bir zincirdir
+ama tarayıcıyı/JS'i hiç çalıştırmaz — gerçek anlamda "E2E" (sayfa render'ı
++ kullanıcı etkileşimi + WebSocket) için ayrı, headless Chrome ile çalışan
+bir Dusk testi eklendi: `tests/Browser/DashboardSyncTest.php`, dashboard'u
+GERÇEK stack'e (nginx → php-fpm → MySQL → Redis → Reverb, mock YOK) karşı
+tarayıcıda açar, "Şimdi Senkronize Et" butonuna basar ve "Son çalışma"
+zaman damgasının **sayfa hiç yenilenmeden**, WebSocket push'i ile
+güncellendiğini doğrular.
+
+```bash
+docker compose up -d selenium   # headless Chrome + WebDriver container'ı
+docker exec server ./vendor/bin/phpunit --configuration=phpunit.dusk.xml
+```
+
+Ayrı bir `phpunit.dusk.xml` kullanılır (`phpunit.xml` DEĞİL) — bu testler
+gerçek dış API'lere (DummyJSON) ve ayrı bir `selenium` container'ına bağımlı
+olduğu için `php artisan test`'in her çalıştırmasında otomatik koşulmamalı.
+`tests/DuskTestCase.php`, tarayıcının (host'ta değil `selenium` container'ında
+çalıştığı için) uygulamaya `http://webserver` (docker-network hostname)
+üzerinden, WebDriver'a ise `http://selenium:4444` üzerinden bağlanacak
+şekilde override edilmiştir. Veritabanına dair kesin sayı assertion'ları
+BİLEREK yapılmaz (dev DB'si truncate edilmeden, çalışan gerçek stack'e
+karşı tekrarlanabilir kalması için) — sadece canlı güncelleme davranışı
+doğrulanır.
 
 Testler `RefreshDatabase` ile her seferinde `db_test` (MySQL) üzerinde
 temiz bir şema kurar — motor-spesifik davranış farkları (ör. `decimal`
@@ -573,9 +602,12 @@ bilinen bir tooling sınırlaması, gerçek bir test boşluğu değil.
 - **Alerting system**: 4/4 case senaryosu (§5, `AlertService`) + structured
   JSON log + throttle + opsiyonel Slack webhook (Notification tercih
   edilen seçenek olarak da karşılanıyor).
-- **Integration/E2E test**: `tests/Feature/SyncIdempotencyAndSweepTest.php`
+- **Integration test**: `tests/Feature/SyncIdempotencyAndSweepTest.php`
   gerçek bir sync run'ını uçtan uca (Http::fake ile provider simülasyonu,
   gerçek DB, gerçek transaction'lar) test eder.
+- **E2E test**: `tests/Browser/DashboardSyncTest.php` (Laravel Dusk +
+  headless Chrome, bkz. §10) — gerçek tarayıcıda dashboard'u açıp gerçek
+  bir sync'i tetikleyerek WebSocket üzerinden canlı güncellemeyi doğrular.
 - **Gerçek zamanlı dashboard** (case'in istediği "auto-refresh"in ötesinde):
   Reverb ile sıfır-polling, tam WebSocket-driven UI (§8) — case'in minimum
   beklediği auto-refresh yerine gerçek push-based güncelleme.
@@ -610,7 +642,8 @@ docs/                       — IMPLEMENTATION_PLAN.md, architecture-flow.{dot,p
 .env.testing / .env.testing.example — testler için Laravel'in native env dosyası
 public/{js,css}/dashboard.* — dashboard'un ayrı JS/CSS dosyaları
 resources/views/dashboard.blade.php
-tests/{Unit,Feature}/
+tests/{Unit,Feature}/       — PHPUnit (phpunit.xml)
+tests/Browser/, tests/DuskTestCase.php, phpunit.dusk.xml — E2E (Laravel Dusk)
 CHANGELOG.md                 — tüm faz kararları, bulunan kritik hatalar, kök-neden analizleri
 CLAUDE.md                    — mimari harita ve konvansiyonlar (Türkçe)
 gereksinimler.md              — orijinal case brief

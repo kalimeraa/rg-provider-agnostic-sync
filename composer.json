@@ -16,6 +16,7 @@
     },
     "require-dev": {
         "fakerphp/faker": "^1.9.1",
+        "laravel/dusk": "^8.6",
         "laravel/pint": "^1.0",
         "laravel/sail": "^1.18",
         "mockery/mockery": "^1.4.4",
@@ -54,6 +55,9 @@
         ],
         "test:coverage": [
             "@php -dzend_extension=xdebug.so -dxdebug.mode=coverage vendor/bin/phpunit --coverage-text"
+        ],
+        "test:e2e": [
+            "vendor/bin/phpunit --configuration=phpunit.dusk.xml"
         ]
     },
     "extra": {
