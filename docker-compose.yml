@@ -196,6 +196,7 @@ services:
   # bağlantısı kuruluyor.
   selenium:
     container_name: selenium
+    profiles: ['dusk']
     image: selenium/standalone-chrome:latest
     # Resmi Selenium image'ı şu an arm64 (Apple Silicon) için yayınlanmıyor —
     # `platform: linux/amd64` ile Docker Desktop'ın emülasyonu (Rosetta)

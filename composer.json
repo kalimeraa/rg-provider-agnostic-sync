@@ -1,8 +1,8 @@
 {
-    "name": "laravel/laravel",
+    "name": "rg/provider-agnostic-sync",
     "type": "project",
-    "description": "The skeleton application for the Laravel framework.",
-    "keywords": ["laravel", "framework"],
+    "description": "İki tedarikçi API'sinden (DummyJSON, FakeStore) yerel MySQL veritabanına, kuyruklu ve hash-bazlı delta sync job'ları üzerinden ürün senkronizasyonu yapan Laravel uygulaması.",
+    "keywords": ["laravel", "sync", "queue", "horizon", "reverb"],
     "license": "MIT",
     "require": {
         "php": "^8.1",
