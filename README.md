@@ -90,6 +90,30 @@ Scheduler zaten her `SYNC_INTERVAL_MINUTES` (varsayılan 5) dakikada bir her
 iki provider için otomatik sync tetikler — hiçbir şey yapmanıza gerek yok,
 `worker` container'ı ayaktayken kendiliğinden çalışır.
 
+### Veritabanına dışarıdan bağlanmak
+
+`db` container'ı host'a `3306` portunda açık (`docker-compose.yml`), yani
+bir DB istemcisiyle (TablePlus, DBeaver, `mysql` CLI, ...) doğrudan
+`localhost:3306`'ya bağlanabilirsiniz. Bilgiler `.env.example`'daki (ve
+`cp` sonrası `.env`'deki) varsayılan değerlerdir:
+
+| Alan | Değer |
+|---|---|
+| Host | `127.0.0.1` (veya `localhost`) |
+| Port | `3306` |
+| Database | `product_sync` |
+| Username | `product_sync` |
+| Password | `secret` |
+
+```bash
+mysql -h 127.0.0.1 -P 3306 -u product_sync -psecret product_sync
+```
+
+Test veritabanı (`db_test`) aynı credential'larla, sadece farklı porttan
+(`3307`) ve farklı database adıyla (`product_sync_test`) erişilebilir —
+bkz. §10 Testler. Bu değerler sadece yerel geliştirme içindir, prod'da
+kullanılmamalıdır.
+
 ### Horizon dashboard'u
 
 ```
