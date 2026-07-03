@@ -60,7 +60,7 @@ docker-compose up -d
 php artisan config:show sync
 ./vendor/bin/phpunit   # db_test (MySQL) container'ina baglanmali
 docker exec worker supervisorctl status   # horizon + scheduler RUNNING
-curl http://localhost:9000/api/health
+curl http://localhost:8080/api/health
 ```
 
 ---
@@ -480,7 +480,7 @@ CDN bundle'ı Reverb ile doğrudan konuşabiliyor, Echo/npm'e gerek yok.
 
 **Depends on:** Faz 4 (tüm API endpoint'leri), Faz 0 (Reverb altyapısı)
 
-**Verification:** Tarayıcıda `http://localhost:9000/` aç; gerçek bir
+**Verification:** Tarayıcıda `http://localhost:8080/` aç; gerçek bir
 WebSocket client'ı (Node'un native `WebSocket`'i) ile `sync-status`
 kanalına abone olup `/api/sync/trigger` çağrıldığında `sync-status.updated`
 (önce `running`, sonra `completed`) event'lerinin anlık geldiği canlı
@@ -554,23 +554,34 @@ ve CHANGELOG.md.
 ## Faz 8 — Dokümantasyon & Teslim Hazırlığı (%10)
 
 **Goal:** README.md, case'in "Teslim Formatı" bölümünün istediği her şeyi
-içerir; proje 5 dakikada ayağa kalkar.
+içerir; proje 5 dakikada ayağa kalkar. Gerçekleşen: orijinal case brief
+`gereksinimler.md`'ye taşındı, `README.md` sıfırdan (case brief üzerine
+değil, tamamen bu projeye özgü) yeniden yazıldı.
 
-**Files:**
-- `README.md` — case brief'in üzerine: kurulum adımları (docker-compose +
-  manuel), `.env` açıklaması, migrate/seed komutları, `horizon`/
-  `schedule:work` nasıl başlatılır, test komutu, **teknik kararlar**
-  bölümü (hash stratejisi, job uniqueness, idempotency, rate limiting —
-  hepsi zaten `CLAUDE.md`'de var, oraya referans verip özetle), API
-  dokümantasyonu (endpoint tablosu + örnek response)
-- `postman/product-sync.postman_collection.json` (opsiyonel, +puan)
-- `CLAUDE.md` — varsa faz boyunca ortaya çıkan sapmaları güncelle (örn.
-  gerçek dosya adları plan'dakinden farklılaştıysa)
+**Files (gerçekleşen):**
+- `README.md` — teknolojiler, 5 dakikalık Docker kurulumu (+ `APP_PORT`
+  çakışma notu), gömülü `docs/architecture-flow.png` ile mimari, sistemin
+  uçtan uca akışı, 6 teknik kararın gerekçesi (DB tasarımı, hash stratejisi,
+  job uniqueness, idempotency, rate limiting/circuit breaker, mark-and-sweep),
+  fail senaryoları tablosu, API dokümantasyonu + Postman referansı, gerçek
+  zamanlı dashboard anlatımı, DB şeması, test talimatları, bonus özellikler,
+  proje yapısı, bilinen sınırlamalar.
+- `docs/architecture-flow.dot`/`.png` — Graphviz ile üretilen 6 kümeli akış
+  diyagramı, README'ye gömülü.
+- `postman/Product-Sync.postman_collection.json` +
+  `Product-Sync.postman_environment.json` — 7 endpoint, gruplu ve açıklamalı.
+- `CLAUDE.md` — sayfa-başına-job mimarisini, `REDIS_CLIENT=predis`
+  zorunluluğunu ve Reverb kurulumunu yansıtacak şekilde güncellendi.
 
 **Depends on:** Faz 0-7 (hepsi bitince doğru dokümante edilebilir)
 
-**Verification:** Temiz bir clone'da README'deki adımları harfiyen izleyip
-5 dakikada ayağa kaldığını doğrula.
+**Verification:** `docker exec server php artisan tinker` ile canlı
+`SyncRunCoordinator::start()` çağrıları ve `curl` ile tüm endpoint'ler
+doğrulandı (bkz. CHANGELOG.md); iki JSON dosyası (`postman/*.json`)
+`python3 -c "import json; json.load(...)"` ile syntax doğrulaması yapıldı;
+README'deki `http://localhost:8080` adresleri, `.env`'in `.env.example`
+varsayılanıyla hizalanmasından sonra canlı `curl` ile 200 döndüğü
+doğrulanarak teyit edildi.
 
 ---
 

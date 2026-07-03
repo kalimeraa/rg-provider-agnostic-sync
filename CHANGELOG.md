@@ -6,6 +6,45 @@ sonuçlarını tarihsel sırayla tutar. Plan dokümanı ileriye dönük "ne
 yapılacak"ı anlatır; bu dosya geriye dönük "ne oldu, ne bulundu, ne
 düzeltildi"yi anlatır.
 
+## Faz 8 — Dokümantasyon & Teslim Hazırlığı
+
+- Case brief `README.md`'den `gereksinimler.md`'ye taşındı (`git mv`), yeni
+  `README.md` sıfırdan yazıldı: teknolojiler, 5 dakikalık kurulum, mimari
+  (gömülü `docs/architecture-flow.png` flowchart'ı ile), sistemin uçtan uca
+  akışı, 6 teknik kararın gerekçesi, fail senaryoları tablosu, API
+  dokümantasyonu, DB şeması, test talimatları, bonus özellikler, proje
+  yapısı.
+- `docs/architecture-flow.dot`/`.png` — Graphviz ile üretilen, 6 kümeli
+  (tetikleme → coordinator → paralel sayfa işleme → sonuçlandırma →
+  alerting/dashboard → DLQ) kapsamlı akış diyagramı.
+- **FakeStore sync'inin dashboard'da "hiç çalışmadı" göründüğü** bildirimi
+  araştırıldı: `storage/logs/laravel.log`'daki eski hata kayıtları (sayfa-
+  başına-job redesign sırasında `FakeStoreProvider`'ın henüz `fetchPage()`'i
+  implement etmediği an + `job_batches` migration'ı henüz yokken alınan bir
+  ekran görüntüsü) gösterdi ki bu geçici bir ara-durum hatasıymış, sonraki
+  commit'lerle zaten düzelmiş. Canlı doğrulandı: `SyncRunCoordinator::
+  start(FakeStore)` ve `POST /api/sync/trigger` ikisi de doğru çalışıyor
+  (20 ürün eklendi, ardından idempotent no-op — `added=0`).
+- Dashboard'a scheduler'ın bir sonraki otomatik tetiklemesine kalan süreyi
+  gösteren istemci-taraflı bir geri sayım eklendi (`window.SYNC_INTERVAL_
+  MINUTES`, Blade'den enjekte, sunucuya ek istek atmadan hesaplanıyor);
+  manuel "Şimdi Senkronize Et" butonunun `is_running` bayrağıyla zaten hem
+  manuel hem otomatik sync sırasında devre dışı kaldığı netleştirildi
+  (tooltip eklendi).
+- `postman/Product-Sync.postman_collection.json` +
+  `Product-Sync.postman_environment.json` — case'in istediği 7 endpoint,
+  gruplu (Sync/Products/Health) ve açıklamalı; `base_url`/`failed_job_uuid`
+  ayrı environment değişkenleri olarak tutuluyor.
+- Yerel `.env`'deki `APP_PORT`'un (bir önceki port çakışmasından kalma)
+  `9000`'e ayarlı olduğu fark edildi; `8080`'in makinede boş olduğu
+  doğrulanıp `.env`, `.env.example`'ın varsayılanıyla (`8080`) hizalandı —
+  README'deki adresler artık doğrudan çalışıyor.
+- README'nin ilk yazımındaki bazı bölümler ("sayfa-başına-job" mimarisi,
+  mark-and-sweep) geliştirme kronolojisini ("ilk tasarımda X yapılmıştı,
+  sonra Y'ye geçildi") anlatıyordu — kullanıcı geri bildirimiyle, sadece
+  mevcut tasarımın NEDEN'ini anlatacak şekilde sadeleştirildi. Kronoloji/
+  hata-avı anlatımı zaten burada, CHANGELOG'da duruyor.
+
 ## Faz 7 — Test Katmanı: iki önemli hata canlı testlerle bulundu
 
 61 test (Unit + Feature + integration/E2E) yazıldı, coverage **%78.26**
