@@ -20,6 +20,77 @@ düzeltildi"yi anlatır.
   doğru kuyrukta göründü, `supervisorctl status` → yeni supervisor adıyla
   `RUNNING`, gerçek bir sync uçtan uca tamamlandı.
 
+- **Faz 5 — Alerting Sistemi:** `AlertService` yazıldı — 4 eşik kontrolü
+  (ardışık sync fail, failed_jobs backlog, ardışık API fail/circuit
+  breaker, queue backlog), her alert tipi+provider için 5 dk throttle,
+  `storage/logs/alerts.log`'a case'in istediği düz (nested değil)
+  `{"level":"ALERT","type":...,"severity":...,"timestamp":...,"provider":...,...}`
+  JSON formatında yazıyor. `config/logging.php`'ye `alerts` kanalı
+  eklendi — bilerek `daily` DEĞİL `single` driver (case sabit bir dosya
+  adı istiyor, tarih eklenmiş dönen dosyalar değil). Slack bildirimi için
+  ayrı bir `Notification` class'ı YAZILMADI (plan bunu öngörmüştü) —
+  tek, sabit bir webhook URL'ine düz bir `Http::post()` atmak,
+  notifiable-routing makinesini gerektirmeyecek kadar basit bir senaryo;
+  bu basitleştirme bilinçli bir sapma. `CircuitBreakerOpenException`'a
+  `consecutiveFailures` yapılandırılmış alanı eklendi (exception mesajını
+  string parse etmek yerine). Tüm 4 senaryo tinker ile canlı test edildi:
+  eşik altı/üstü davranış, throttle, `recordSyncSuccess`'in sayacı
+  sıfırlaması.
+
+- **Büyük yeniden tasarım — sayfa-başına-job mimarisi:** kullanıcı,
+  DummyJSON'ın sayfalamasını tek bir job içinde `do-while` ile döngüye
+  almanın (194 ürün, 2 sayfa olsa da) sınırsız/güvenilir olmadığını fark
+  etti — provider'ın `total` alanı bozuk/anormal büyük dönerse ya da her
+  sayfada 429 backoff'a takılırsa, tek job Horizon'un job timeout'unu
+  (60s) aşıp zorla öldürülebilirdi. "İyi bir mimari" istendi; şu şekilde
+  yeniden tasarlandı:
+
+  - `ProviderClientInterface::fetchAll()` → `fetchPage(int $page):
+    ProviderPage` (`{items, totalPages}` — provider kendi sayfa boyutunu
+    kendisi bilir, çağıran taraf bilmez)
+  - `SyncRunCoordinator` (yeni): bir provider'ın koşusunu yönetir — ilk
+    sayfayı çekip `totalPages`'i öğrenir (50 sayfa güvenlik sınırı,
+    `PaginationLimitExceededException`), her sayfa için bir
+    `FetchProviderPageJob` içeren bir `Bus::batch()` dispatch eder, batch
+    biterken (`then()`/`catch()`) finalize eder
+  - **Uniqueness artık `ShouldBeUnique` DEĞİL**: bu, tek bir job'un
+    ömrüne bağlı, ama artık "ömür" tüm batch'in bitmesi demek. Bunun
+    yerine `SyncRunCoordinator` elle bir `Cache::lock()` tutuyor; owner
+    token'ı batch'in `then()`/`catch()` callback'lerine taşınıp
+    (`Cache::restoreLock()`) FARKLI bir process'ten serbest bırakılıyor
+  - **Silme tespiti artık mark-and-sweep**: `DeltaSyncService::upsertPage()`
+    artık sadece ekleme/güncelleme yapıyor (silme mantığı YOK — hiçbir
+    tek çağrı artık uzak listenin tamamını görmüyor). Her upsert
+    `last_synced_at`'i bu run'a özel SABİT bir zaman damgasıyla işaretler;
+    `SyncRunCoordinator` TÜM sayfalar bitince bu damgadan eski
+    `last_synced_at`'e sahip ürünleri soft-delete eder. `catch()`
+    yolunda (bir sayfa kalıcı başarısız oldu) sweep BİLEREK çalışmaz —
+    eksik veriyle yanlış silme yapılmasın diye.
+  - **`ThrottledHttpClient` artık Redis-tabanlı paylaşımlı**: pacing ve
+    ardışık-başarısızlık sayacı `$providerKey`'e göre Redis'te tutuluyor
+    (`Cache::lock()` korumalı atomik read-modify-write) — paralel
+    çalışan sayfa job'ları aynı 5rps bütçesini ve aynı circuit-breaker
+    sayacını paylaşıyor. Instance-local olsaydı, N paralel worker N
+    kat rate limit aşımına yol açardı.
+  - `ProviderFactory`, `ThrottledHttpClient`'ı artık container binding'i
+    yerine elle (provider-key'i bilerek) inşa ediyor;
+    `AppServiceProvider`'daki eski binding kaldırıldı.
+  - `PaginatesResults` trait'i (bu redesign'dan hemen önce, tek-job
+    mimarisindeki `do-while`'ı güvenli hale getirmek için yazılmıştı)
+    SİLİNDİ — artık gereksiz, çünkü hiçbir provider kendi içinde birden
+    fazla sayfa çekmiyor.
+  - Eksik olan `job_batches` tablosu migration'ı (`queue:batches-table`)
+    eklendi — `Bus::batch()` bunsuz çalışmaz.
+
+  **Canlı doğrulandı:** gerçek DummyJSON sync'i tam olarak 2
+  `FetchProviderPageJob` içeren bir batch oluşturdu, ikisi de başarıyla
+  bitti, `added=194`; tekrar çalıştırıldığında idempotency doğru
+  (`added=0`); manuel eklenen bir "hayalet" ürün bir sonraki run'da
+  sweep ile doğru soft-delete edildi; aynı provider için art arda
+  `SyncRunCoordinator::start()` çağrısı, batch bitene kadar ikinci
+  çağrıyı sessizce reddetti, batch bitince kilit serbest kalıp üçüncü
+  çağrı yeni bir run başlattı.
+
 ## Faz 0 — Proje İskeleti & Altyapı Kurulumu
 
 - `laravel/horizon`, `config/sync.php`, `ProviderType` enum eklendi.

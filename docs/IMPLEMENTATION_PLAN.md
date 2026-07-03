@@ -143,69 +143,82 @@ parametresi olmadan düz array olarak **20** ürün döndürüyor.
 
 ## Faz 2 — Domain / Servis Katmanı
 
-**Goal:** Herhangi bir provider'dan veri çekip hash'leyip DB'ye delta olarak
-yazan, kendi kendini throttle eden servis katmanı — henüz queue/job yok, çıplak
-servisler unit test edilebilir durumda.
+**Goal:** Herhangi bir provider'dan tek bir sayfa veri çekip hash'leyip
+DB'ye upsert eden, kendi kendini (paylaşımlı/Redis-tabanlı olarak) throttle
+eden servis katmanı — henüz queue/job yok, çıplak servisler unit test
+edilebilir durumda.
+
+> Bu faz iki kez yazıldı: ilk sürümde `fetchAll()` tek bir job içinde tüm
+> sayfaları döngüyle çekiyordu. Sonradan sayfa-başına-job mimarisine
+> geçildi (bkz. Faz 3 ve CHANGELOG.md) — aşağıdaki açıklama GÜNCEL/son
+> hâlidir.
 
 **Files:**
-- `app/Contracts/ProviderClientInterface.php` — `fetchAll(): Collection`,
-  `fetchOne(string $externalId): ?array` (sadece bu iki metod — ISP: caller'ın
+- `app/Contracts/ProviderClientInterface.php` — `fetchPage(int $page):
+  ProviderPage`, `fetchOne(string $externalId): ?array` (ISP: caller'ın
   ihtiyacı bundan fazlası değil)
+- `app/DTOs/ProviderPage.php` — `{items, totalPages}`: provider kendi
+  sayfa boyutunu bilir, `totalPages`'i kendisi hesaplar; çağıran taraf
+  (sayfa sayısını öğrenmek dışında) provider'ın sayfalama detaylarını hiç
+  bilmez
 - `app/Services/Providers/DummyJsonProvider.php`,
   `app/Services/Providers/FakeStoreProvider.php` — interface implementasyonu;
   her biri kendi API şeklini (`title` vs `name`, `rating` gibi volatile
-  alanlar) normalize edip ortak bir array şekline çevirir
+  alanlar) normalize edip ortak bir array şekline çevirir. FakeStore
+  sayfalama yapmadığı için `totalPages` her zaman 1'dir.
 - `app/Services/Providers/ProviderFactory.php` — `ProviderType` enum → client
-  instance resolver
-- `app/Providers/AppServiceProvider.php` — `ProviderClientInterface`'i
-  `ProviderFactory` üzerinden `bind()` et (singleton **değil** — stateless,
-  her çağrıda taze instance testte mock'lanabilsin)
+  instance resolver; `ThrottledHttpClient`'ı provider-key'i bilerek ELLE
+  inşa eder (container binding'i DEĞİL — client'ın pacing/circuit-breaker
+  durumu provider'a göre değişir, autowiring bunu taşıyamaz)
 - `app/Services/Sync/HashService.php` — `hash(array $normalizedProduct):
   string` → `{name, price, stock, description}` üzerinden `sha256`
   (`external_id`/`provider_type` kimlik alanı olduğu, `ratings`/`images` gibi
   volatile alanlar da içerik değişikliği sayılmadığı için hash'e dahil değil)
-- `app/Services/Sync/ThrottledHttpClient.php` — 5 rps pacing (`usleep`
-  tabanlı basit token pacing), 429 → exponential backoff (1s/2s/4s), 5
-  ardışık hatada circuit breaker (exception fırlatıp job'u durdurur)
-- `app/Services/Sync/DeltaSyncService.php` — `sync(ProviderType $provider):
-  SyncResult`: provider'dan tüm listeyi çek → mevcut DB kayıtlarıyla
-  `external_id` bazında eşleştir → yeni/hash-farklı/eksik olanları ayır →
-  tamamı **tek `DB::transaction()`** içinde upsert + soft-delete
-- `app/DTOs/SyncResult.php` — `added:int, updated:int, deleted:int,
-  errorMessage:?string` (controller/job'a çıplak array yerine tip geçmek için)
+- `app/Services/Sync/ThrottledHttpClient.php` — 5 rps pacing + 429
+  exponential backoff (1s/2s/4s) + 5 ardışık hatada circuit breaker.
+  **Redis-tabanlı, `$providerKey`'e göre paylaşımlı** (instance-local
+  DEĞİL): aynı provider için paralel çalışan birden çok sayfa job'u tek
+  bir rate limit bütçesini ve tek bir hata sayacını paylaşır.
+- `app/Services/Sync/DeltaSyncService.php` — `upsertPage(ProviderType,
+  array $items, CarbonInterface $syncRunStartedAt): array{added,updated}`:
+  SADECE ekleme/güncelleme. Silme mantığı burada YOK — hiçbir tek çağrı
+  artık uzak listenin TAMAMINI görmüyor (bkz. Faz 3, SyncRunCoordinator).
+  Her item kendi `DB::transaction()`'ı + `lockForUpdate()` ile işlenir.
+- `app/DTOs/SyncResult.php` — `{added, updated, deleted}` — artık
+  `DeltaSyncService`'in değil, `SyncRunCoordinator`'ın (tüm sayfalar +
+  sweep bitince) ürettiği nihai özet.
 
 **Pattern(s) applied:**
 - **Strategy** (`ProviderClientInterface` + iki implementasyon) — DummyJSON ve
-  FakeStore'un veri şekli farklı ama sync akışı aynı; yeni bir tedarikçi
-  eklemek sadece yeni bir implementasyon demek, `DeltaSyncService`'e
-  dokunulmaz.
-- **Factory** (`ProviderFactory`) — enum'dan implementasyon seçimi tek yerde
-  toplanır, `AppServiceProvider` binding'i bu resolver'a delege eder.
-- **Decorator** (`ThrottledHttpClient`, provider client'ların HTTP çağrısını
-  sarar) — rate-limit/backoff davranışı provider implementasyonlarının
-  kendisine karışmaz, ayrı bir katman olarak eklenir/çıkarılabilir.
-- **DTO** (`SyncResult`) — servis → job/controller sınırında tip güvenliği.
+  FakeStore'un veri şekli farklı ama sayfa-çekme akışı aynı; yeni bir
+  tedarikçi eklemek sadece yeni bir implementasyon demek.
+- **Factory** (`ProviderFactory`) — enum'dan implementasyon seçimi VE
+  provider-key'li `ThrottledHttpClient` inşası tek yerde toplanır.
+- **DTO** (`ProviderPage`, `SyncResult`) — servis/job sınırlarında tip
+  güvenliği; provider'ın sayfalama detayları çağıran tarafa sızmaz.
+- **Decorator** düşünüldü (ThrottledHttpClient'ı ayrı bir sarmalayıcı
+  olarak) ama zaten `ProviderClientInterface`'in kendisi değil, onun
+  implementasyonlarının bir bağımlılığı olarak tasarlandı — ayrı bir
+  Decorator katmanına gerek kalmadı.
 
 **SOLID:**
-- **SRP:** `HashService` sadece hash'ler, `DeltaSyncService` sadece
-  add/update/delete kararını verir, `ThrottledHttpClient` sadece pacing/
-  backoff yapar — üçü de ayrı sebeplerle değişir.
+- **SRP:** `HashService` sadece hash'ler, `DeltaSyncService` sadece tek
+  sayfalık upsert kararını verir (silme YOK), `ThrottledHttpClient` sadece
+  paylaşımlı pacing/circuit-breaker yapar.
 - **OCP:** Yeni tedarikçi = yeni `ProviderClientInterface` implementasyonu +
   `ProviderFactory`'ye bir `match` kolu; `DeltaSyncService` değişmez.
-- **LSP:** `DummyJsonProvider` ve `FakeStoreProvider` aynı normalize edilmiş
-  array şeklini döndürür — `DeltaSyncService` hangi implementasyonla
-  çalıştığını bilmeden aynı davranışı bekleyebilir.
-- **ISP:** `ProviderClientInterface` sadece 2 metod — bir mock'un tüm
-  yüzeyi implemente etmesi kolay.
-- **DIP:** `DeltaSyncService`, `ProviderClientInterface`'e bağımlı;
-  somut client `AppServiceProvider` binding'i üzerinden enjekte edilir.
+- **LSP:** `DummyJsonProvider` ve `FakeStoreProvider` aynı `ProviderPage`
+  şeklini döndürür — çağıran taraf hangi implementasyonla çalıştığını
+  bilmeden aynı davranışı bekleyebilir.
+- **ISP:** `ProviderClientInterface` sadece 2 metod.
+- **DIP:** `DeltaSyncService`/sayfa job'ları `ProviderClientInterface`'e
+  bağımlı; somut client `ProviderFactory` üzerinden enjekte edilir.
 
 **Depends on:** Faz 1 (Product modeli, migration'lar)
 
 **Verification:**
 ```
-php artisan tinker --execute="app(\App\Services\Sync\DeltaSyncService::class)->sync(\App\Enums\ProviderType::DummyJson)"
-# ilk çalıştırma: added=100, ikinci çalıştırma (veri değişmediyse): added=0 updated=0
+php artisan tinker --execute="app(\App\Services\Providers\ProviderFactory::class)->make(\App\Enums\ProviderType::DummyJson)->fetchPage(0)"
 php artisan test --filter=HashServiceTest
 ```
 
@@ -214,62 +227,96 @@ rate-limit uygulamıyor) — Faz 7'de `Http::fake()` ile unit test edilecek.
 
 ---
 
-## Faz 3 — Queue, Job & Scheduler Katmanı
+## Faz 3 — Sayfa-Başına-Job Batch Mimarisi (Queue, Coordinator & Scheduler)
 
-**Goal:** Sync işlemi arka planda, provider-bazlı kilitli, retry/backoff'lu
-bir job olarak çalışır; scheduler her 5-10 dakikada bir tetikler; Horizon
-dashboard'u ayakta.
+**Goal:** Bir provider'ın senkronizasyonu, her biri kendi retry/backoff'una
+sahip, paralel çalışabilen sayfa job'larına bölünür; TEK bir job'un tüm
+sayfaları çekmeye çalışırken zaman aşımına uğrama riski olmaz; scheduler her
+5-10 dakikada bir tetikler; Horizon dashboard'u ayakta.
+
+> **Neden bu şekilde:** İlk tasarımda (`SyncProviderJob` + `ShouldBeUnique`)
+> tek bir job `DeltaSyncService::sync()` içinde TÜM sayfaları döngüyle
+> çekiyordu. DummyJSON'ın sayfalaması (`total`/`skip`) provider'ın kendi
+> beyanına güveniyordu; `total` bozuk/anormal büyük dönerse ya da her
+> sayfada 429 backoff'a takılırsa, tek job Horizon'un job timeout'unu
+> (60s) aşıp zorla öldürülebilirdi. Bu fazın tasarımı bu riski ortadan
+> kaldırır (bkz. CHANGELOG.md'deki tam gerekçe ve canlı doğrulama).
 
 **Files:**
-- `app/Jobs/SyncProviderJob.php` — `implements ShouldQueue, ShouldBeUnique`;
-  `$uniqueId` = provider value (`"dummyjson"`/`"fakestore"` — job class'ı
-  değil), `$uniqueFor` = `config('sync.job_unique_for')`; `tries = 3`,
-  `backoff = [1, 2, 4]`; `handle()` sadece `DeltaSyncService::sync()`'i çağırıp
-  sonucu `SyncLog`'a yazar; `failed()` hook'u `AlertService`'e haber verir
-  (Faz 5)
-- `app/Console/Kernel.php` — `$schedule->job(new SyncProviderJob($provider))
-  ->everyFiveMinutes()` her iki provider için (`withoutOverlapping` DEĞİL —
-  uniqueness zaten job seviyesinde, scheduler'da tekrar kilitlemek yanlış
-  katmanda çözüm olurdu)
+- `app/Jobs/FetchProviderPageJob.php` — TEK bir sayfayı çeker (`fetchPage`)
+  ve upsert eder (`DeltaSyncService::upsertPage`); `tries=3`,
+  `backoff=[1,2,4]`; `Batchable` — `$this->batch()?->cancelled()` ise atlar;
+  `CircuitBreakerOpenException` özel olarak yakalanıp retry edilmeden
+  `fail()` ile kalıcı başarısız işaretlenir (circuit breaker zaten "bu
+  provider'a artık istek atma" demek, tekrar denemek anlamsız)
+- `app/Services/Sync/SyncRunCoordinator.php` — bir provider'ın run'ını
+  yönetir:
+  1. `Cache::lock()` alır (provider bazlı, TÜM batch ömrü boyunca —
+     `ShouldBeUnique` DEĞİL, çünkü o sadece TEK bir job'u kapsar, artık
+     "iş" bir batch'in tamamı)
+  2. İlk sayfayı çekip `totalPages`'i öğrenir; 50 sayfa güvenlik sınırını
+     aşarsa `PaginationLimitExceededException` (provider'ın `total`'ı
+     güvenilmezse binlerce job kuyruklamak yerine hemen durur)
+  3. Her sayfa için bir `FetchProviderPageJob` içeren `Bus::batch()`
+     dispatch eder
+  4. `then()` (TÜM sayfalar başarılı): mark-and-sweep silme (bu run'a özel
+     sabit başlangıç zaman damgasından eski `last_synced_at`'e sahip
+     ürünleri soft-delete eder), Redis sayaçlarından `SyncResult` üretir,
+     `SyncLog`'u "completed" yapar, kilidi (owner token'ı
+     `Cache::restoreLock()` ile taşıyarak, FARKLI bir process'ten) serbest
+     bırakır
+  5. `catch()` (bir sayfa kalıcı başarısız oldu, batch iptal edildi):
+     sweep YAPILMAZ (eksik veriyle yanlış silme olmasın), `SyncLog`'u
+     "failed" yapar, `AlertService`'e bildirir, kilidi serbest bırakır
+- `app/Jobs/SyncProviderJob.php` — scheduler/API'nin dispatch ettiği ince
+  wrapper; `handle()` sadece `SyncRunCoordinator::start()`'ı çağırır.
+  `tries=3`/`backoff=[1,2,4]`/`failed()` sadece "ilk sayfayı öğrenme
+  adımı" başarısız olursa devreye girer — bir sayfa job'unun batch
+  içindeki başarısızlığı ayrı yoldan (`SyncRunCoordinator::finishWithFailure`)
+  ele alınır, burada tekrar işlenmez.
+- `app/Console/Kernel.php` — `$schedule->job(new SyncProviderJob($provider))`
+  her iki provider için (`withoutOverlapping` DEĞİL — uniqueness zaten
+  coordinator seviyesinde)
 - `config/horizon.php` — tek, provider-agnostic `product-sync` kuyruğu
-  (`product-sync-supervisor`) — dummyjson/fakestore için ayrı kuyruklara
-  bölünmez, hangi provider olduğu zaten job'ın kendi parametresinde;
-  supervisor sayısı düşük (mock API'ler küçük, 5rps limit zaten darboğaz)
+  (`product-sync-supervisor`)
+- `database/migrations/..._create_job_batches_table.php` —
+  `php artisan queue:batches-table` ile üretilir; `Bus::batch()` bu tablo
+  olmadan çalışmaz
 - Horizon'un hangi container'da, hangi mekanizmayla (supervisord) çalıştığı
   Faz 0'da (`worker` container'ı) çözüldü — burada tekrar edilmiyor (DRY)
 
 **Pattern(s) applied:**
-- **Singleton** düşünüldü ama **atlandı** — `ShouldBeUnique`'in cache lock'u
-  zaten Redis üzerinden atomik ve stateless; ek bir uygulama-seviyesi
-  singleton rate-limiter'a gerek yok, `ThrottledHttpClient` her job
-  invocation'ında taze instance olarak yeterli.
-- **Template Method** düşünüldü (ortak bir `SyncJob` base class + provider'a
-  özel hook) ama **atlandı** — tek bir job class zaten provider'ı parametre
-  olarak alıp `DeltaSyncService`'e delege ediyor, iki alt sınıfa ayırmak
-  gereksiz soyutlama olurdu.
+- **Mediator/Coordinator** (`SyncRunCoordinator`) — kilit yönetimi, batch
+  dispatch ve finalize mantığını tek bir yerde toplar; `FetchProviderPageJob`
+  ve `SyncProviderJob` bu koordinasyonun detaylarını bilmez.
+- **Mark-and-sweep** — dağıtık/parçalı bir işlemde "tümü bitti mi, ne
+  eksik kaldı" sorusunu tek bir merkezi diff yerine zaman damgası +
+  sonradan süpürme ile çözen, dağıtık sistemlerde yaygın bir desen.
+- **Template Method** düşünüldü (ortak bir job base class) ama **atlandı**
+  — `FetchProviderPageJob` zaten tek bir sınıf, provider'a özgü davranış
+  `ProviderClientInterface` implementasyonunda; ikinci bir soyutlamaya
+  gerek yok.
 
 **SOLID:**
-- **SRP:** `SyncProviderJob`'ın tek sorumluluğu queue/retry/uniqueness
-  orkestrasyonu; asıl iş mantığı `DeltaSyncService`'te kalır (job'u unit
-  test etmek yerine servisi test etmeyi kolaylaştırır).
+- **SRP:** `FetchProviderPageJob` sadece "bir sayfayı çek+upsert et";
+  `SyncRunCoordinator` sadece "bir run'ın yaşam döngüsünü yönet" (kilit,
+  batch, finalize); `SyncProviderJob` sadece "coordinator'ı tetikle" —
+  üçü de ayrı sebeplerle değişir.
+- **DIP:** `SyncRunCoordinator`, `ProviderFactory`/`AlertService`
+  soyutlamalarına bağımlı; somut implementasyonlar container üzerinden
+  enjekte edilir.
 
-**Depends on:** Faz 2 (`DeltaSyncService`)
+**Depends on:** Faz 2 (`DeltaSyncService::upsertPage`, `ProviderPage`)
 
 **Verification:**
 ```
-php artisan horizon:install && php artisan migrate
-php artisan horizon   # ayrı terminalde
+php artisan horizon:install && php artisan queue:batches-table && php artisan migrate
+docker exec worker supervisorctl status   # horizon + scheduler RUNNING
 php artisan tinker --execute="App\Jobs\SyncProviderJob::dispatch(\App\Enums\ProviderType::DummyJson)"
-# aynı provider için ikinci dispatch aynı anda -> queue'da tekilleştiğini Horizon UI'da doğrula
+# job_batches tablosunda total_jobs=totalPages, pending_jobs=0, failed_jobs=0 olduğunu doğrula
+# aynı provider için ikinci bir start() çağrısı, batch bitene kadar sessizce hiçbir şey yapmamalı
 php artisan schedule:list   # her iki provider'ın 5 dk'da bir göründüğünü doğrula
 ```
-
-**Not:** `SyncProviderJob::failed()` hook'u `AlertService`'e bağımlı olduğu
-için Faz 5'te eklenir (bu fazda henüz yok). Her job attempt kendi `SyncLog`
-satırını oluşturur (bir attempt'in mutasyonlarını sıradaki retry'a taşımak
-yerine) — bu, `sync/history` endpoint'inde hangi denemenin başarısız/başarılı
-olduğunu ayrı ayrı görebilmeyi sağlar ve iş kuyruğu serialization'ının
-retry'lar arası mutable state taşıma belirsizliğinden kaçınır.
 
 ---
 
@@ -338,40 +385,59 @@ fail, 100+ queue backlog) 5 dakikada 1'i geçmeyecek şekilde structured JSON
 log + opsiyonel Slack webhook.
 
 **Files:**
-- `app/Services/Alerts/AlertService.php` — `checkAndAlert()` 4 kontrolü
-  çalıştırır; her alert tipi için `Cache::remember` ile 5 dk throttle
-  (`ALERT_THROTTLE_MINUTES`); `storage/logs/alerts.log`'a
-  `{"level":"ALERT","type":...,"severity":...,"timestamp":...,"details":{...}}`
-  yazar
-- `config/logging.php` — `alerts` diye ayrı bir `channel` (daily, ayrı dosya)
-- `app/Notifications/SlackAlertNotification.php` — `ALERT_SLACK_WEBHOOK_URL`
-  set'liyse gönderilir (Null Object yerine basit `if (config(...))` — bkz.
-  §Yapılmayanlar)
-- `SyncProviderJob::failed()` ve `DeltaSyncService` çağrı noktalarına
-  `AlertService::checkAndAlert()` çağrısı
+- `app/Services/Alerts/AlertService.php` — 4 ayrı public metod (tek bir
+  `checkAndAlert()` yerine, her biri kendi çağrı noktasından tetiklenir):
+  - `recordSyncSuccess(ProviderType)` — ardışık-fail sayacını sıfırlar
+    (`SyncRunCoordinator::finishSuccessfully()`'den çağrılır)
+  - `recordSyncFailure(ProviderType)` — sayacı artırır, eşik
+    (`ALERT_CONSECUTIVE_SYNC_FAILURES`, varsayılan 3) aşıldıysa alert
+    (`SyncRunCoordinator::finishWithFailure()` ve `SyncProviderJob::failed()`'den)
+  - `recordCircuitBreakerTripped(ProviderType, int $consecutiveFailures)` —
+    `CircuitBreakerOpenException` yakalanınca (`ALERT_CONSECUTIVE_API_FAILURES`)
+  - `checkFailedJobBacklog()` / `checkQueueBacklog()` — sırasıyla
+    `ALERT_FAILED_JOB_THRESHOLD` / `ALERT_QUEUE_BACKLOG_THRESHOLD`
+  - Ortak private `alert()`: throttle (`Cache`, tip+provider bazlı,
+    `ALERT_THROTTLE_MINUTES`), `storage/logs/alerts.log`'a düz (nested
+    değil) `{"level":"ALERT","type":...,"severity":...,"timestamp":...,
+    "provider":...,...}` JSON, `ALERT_SLACK_WEBHOOK_URL` set'liyse
+    `Http::post()`
+- `config/logging.php` — `alerts` kanalı, bilerek `single` driver
+  (`daily` DEĞİL — case sabit bir dosya adı istiyor, tarih eklenmiş
+  dönen dosyalar değil)
+- `app/Exceptions/Sync/CircuitBreakerOpenException.php` —
+  `$consecutiveFailures` yapılandırılmış alanı (Faz 2'de eklendi,
+  burada tüketilir)
 
 **Pattern(s) applied:**
 - **Null Object** düşünüldü (`NullAlertChannel` Slack yoksa) ama
-  **atlandı** — tek bir `if (config('services.slack_webhook'))` çağrı
-  noktasında yeterince açık, ayrı bir sınıf hiyerarşisi over-engineering
-  olurdu.
+  **atlandı** — tek bir `if (! empty($webhookUrl))` çağrı noktasında
+  yeterince açık, ayrı bir sınıf hiyerarşisi over-engineering olurdu.
 - **Observer** düşünüldü (model/job event listener'ları ile alert tetikleme)
   ama **atlandı** — alert kontrolü sync akışının kendi doğruluğunun bir
-  parçası (kaç tane ardışık hata oldu), yan etki değil; `DeltaSyncService`/
-  `SyncProviderJob` içinde doğrudan çağrı daha okunur.
+  parçası (kaç tane ardışık hata oldu), yan etki değil; `SyncRunCoordinator`
+  içinde doğrudan çağrı daha okunur.
+- **Notification class** (plan ilk yazımında `SlackAlertNotification`
+  öngörmüştü) **atlandı** — tek, sabit bir webhook URL'ine düz bir
+  `Http::post()` atmak, Laravel'in notifiable-routing makinesini
+  (queue, kanal seçimi vb.) gerektirmeyecek kadar basit bir senaryo;
+  `Http::fake()` ile aynı şekilde test edilebilir.
 
 **SOLID:**
 - **SRP:** `AlertService` sadece eşik kontrolü + throttle + log/notify
-  yapar; sync mantığına karışmaz.
+  yapar; sync mantığına karışmaz — her metod tek bir eşiğe bakar.
 
-**Depends on:** Faz 3 (job failure hook), Faz 2 (consecutive-failure sayacı
-`ThrottledHttpClient`'ta zaten tutuluyor)
+**Depends on:** Faz 3 (`SyncRunCoordinator`'ın başarı/başarısızlık/circuit-breaker
+çağrı noktaları), Faz 2 (`CircuitBreakerOpenException.$consecutiveFailures`)
 
 **Verification:**
 ```
-# eşik altı bir senaryo simüle et (ör. provider URL'sini yanlış env'e çevirip 5 job fail ettir)
-tail -f storage/logs/alerts.log
-php artisan test --filter=AlertServiceTest
+php artisan tinker --execute="
+\$a = app(App\Services\Alerts\AlertService::class);
+\$a->recordSyncFailure(App\Enums\ProviderType::DummyJson);
+\$a->recordSyncFailure(App\Enums\ProviderType::DummyJson);
+\$a->recordSyncFailure(App\Enums\ProviderType::DummyJson); // 3. tekrar -> alert
+"
+cat storage/logs/alerts.log
 ```
 
 ---
@@ -484,8 +550,12 @@ içerir; proje 5 dakikada ayağa kalkar.
   step eklemek `package.json`'ı "unused leftover" olmaktan çıkarıp gereksiz
   karmaşıklık getirirdi.
 - **withoutOverlapping() scheduler seviyesinde** — atlandı; uniqueness zaten
-  job seviyesinde (`ShouldBeUnique`) çözülüyor, iki katmanda aynı kilidi
-  tutmak kafa karıştırıcı olurdu.
+  `SyncRunCoordinator` seviyesinde (`Cache::lock()`, tüm batch ömrü boyunca)
+  çözülüyor, iki katmanda aynı kilidi tutmak kafa karıştırıcı olurdu.
+- **Sayfa job'ları için de `ShouldBeUnique`** — atlandı; uniqueness zaten
+  tek bir provider-bazlı kilit olarak `SyncRunCoordinator`'da tutuluyor,
+  her sayfa job'una ayrıca kilit eklemek gereksiz ve batch'in kendi
+  `cancelled()` mekanizmasıyla çakışırdı.
 
 ---
 
