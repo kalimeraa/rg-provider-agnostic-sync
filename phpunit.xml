@@ -16,33 +16,28 @@
         <include>
             <directory>app</directory>
         </include>
+        <!-- Bu projenin domain'ine (product sync) ait olmayan, `laravel new`
+             tarafından üretilmiş ve HİÇ özelleştirilmemiş iskelet dosyaları —
+             sıfır custom mantık içerdikleri için (sadece parent class'tan
+             property override eden boş kabuklar) coverage'a dahil etmek
+             gerçek bir sinyal üretmez, sadece gürültü olur. `App\Models\User`
+             ve Sanctum, projede hiçbir yerde gerçekten kullanılmıyor (case'in
+             API'si tamamen açık, token üretimi/tüketimi yok). -->
+        <exclude>
+            <file>app/Http/Kernel.php</file>
+            <directory>app/Http/Middleware</directory>
+            <file>app/Models/User.php</file>
+        </exclude>
     </source>
     <php>
-        <!-- force="true" ZORUNLU: docker container'ında bu değişkenlerin hepsi
-             zaten .env üzerinden GERÇEK process env var'ı olarak set edilmiş
-             (docker-compose.yml'in env_file: .env'i). force olmadan PHPUnit,
-             "zaten set edilmiş" bir env var'ı SESSİZCE ez­mez — bu yüzden bu
-             satırlar force'suz hiçbir işe yaramıyordu (testler farkında
-             olmadan gerçek `db`'ye karşı, redis queue ile çalışıyordu).
-             Canlı doğrulandı: force eklenmeden önce config('queue.default')
-             testler içinde "redis" dönüyordu, APP_ENV "local" kalıyordu. -->
-        <env name="APP_ENV" value="testing" force="true"/>
-        <env name="BCRYPT_ROUNDS" value="4" force="true"/>
-        <env name="CACHE_DRIVER" value="array" force="true"/>
-        <!-- ShouldBroadcastNow event'leri (SyncStatusUpdated, FailedJobRecorded) gerçek
-             Reverb'e HTTP çağrısı yapmaya çalışmasın diye — testler Reverb'siz çalışır. -->
-        <env name="BROADCAST_DRIVER" value="log" force="true"/>
-        <!-- SQLite DEĞİL: db_test, docker-compose.yml'deki ayrı bir MySQL container'ı (üretimle aynı motor). -->
-        <env name="DB_CONNECTION" value="mysql" force="true"/>
-        <env name="DB_HOST" value="db_test" force="true"/>
-        <env name="DB_PORT" value="3306" force="true"/>
-        <env name="DB_DATABASE" value="product_sync_test" force="true"/>
-        <env name="DB_USERNAME" value="product_sync" force="true"/>
-        <env name="DB_PASSWORD" value="secret" force="true"/>
-        <env name="MAIL_MAILER" value="array" force="true"/>
-        <env name="PULSE_ENABLED" value="false" force="true"/>
-        <env name="QUEUE_CONNECTION" value="sync" force="true"/>
-        <env name="SESSION_DRIVER" value="array" force="true"/>
-        <env name="TELESCOPE_ENABLED" value="false" force="true"/>
+        <!-- Laravel 10.x testing dokümantasyonu: `APP_ENV=testing` set
+             edilince Laravel, `.env` yerine kök dizindeki `.env.testing`'i
+             okur (DB_HOST=db_test, QUEUE_CONNECTION=sync vb. hepsi orada) —
+             bkz. https://laravel.com/docs/10.x/testing#the-env-testing-environment-file.
+             Bunun çalışabilmesi için docker-compose.yml'de `server`/`worker`/
+             `reverb` servislerinde BİLEREK `env_file: .env` YOK (bkz. o
+             dosyadaki açıklama) — aksi halde container'ın OS ortamı
+             `.env.testing`'in üzerini sessizce ezerdi. -->
+        <env name="APP_ENV" value="testing"/>
     </php>
 </phpunit>

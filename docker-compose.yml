@@ -27,7 +27,14 @@ services:
         condition: service_healthy
       redis:
         condition: service_started
-    env_file: .env
+    # BİLEREK `env_file: .env` YOK: Laravel zaten kendi Dotenv mekanizmasıyla
+    # `.env`'i (veya `APP_ENV=testing` ise `.env.testing`'i) her process
+    # başlangıcında dosyadan okuyor — `env_file:` bunu container'ın OS
+    # process ortamına ($_SERVER dahil) PHP hiç başlamadan ÖNCE yazardı ve bu,
+    # PHPUnit'in `phpunit.xml`/`--env=testing` ile yaptığı override'ları
+    # $_SERVER seviyesinde SESSİZCE ezerdi (canlı doğrulandı, bkz.
+    # CHANGELOG.md) — `php artisan test` bu yüzden `.env.testing`'i hiç
+    # göremiyordu.
     volumes:
       - '.:/var/www/server'
       - '/var/www/server/vendor'
@@ -53,7 +60,14 @@ services:
         condition: service_healthy
       redis:
         condition: service_started
-    env_file: .env
+    # BİLEREK `env_file: .env` YOK: Laravel zaten kendi Dotenv mekanizmasıyla
+    # `.env`'i (veya `APP_ENV=testing` ise `.env.testing`'i) her process
+    # başlangıcında dosyadan okuyor — `env_file:` bunu container'ın OS
+    # process ortamına ($_SERVER dahil) PHP hiç başlamadan ÖNCE yazardı ve bu,
+    # PHPUnit'in `phpunit.xml`/`--env=testing` ile yaptığı override'ları
+    # $_SERVER seviyesinde SESSİZCE ezerdi (canlı doğrulandı, bkz.
+    # CHANGELOG.md) — `php artisan test` bu yüzden `.env.testing`'i hiç
+    # göremiyordu.
     volumes:
       - '.:/var/www/server'
       - '/var/www/server/vendor'
@@ -78,7 +92,14 @@ services:
         condition: service_healthy
       redis:
         condition: service_started
-    env_file: .env
+    # BİLEREK `env_file: .env` YOK: Laravel zaten kendi Dotenv mekanizmasıyla
+    # `.env`'i (veya `APP_ENV=testing` ise `.env.testing`'i) her process
+    # başlangıcında dosyadan okuyor — `env_file:` bunu container'ın OS
+    # process ortamına ($_SERVER dahil) PHP hiç başlamadan ÖNCE yazardı ve bu,
+    # PHPUnit'in `phpunit.xml`/`--env=testing` ile yaptığı override'ları
+    # $_SERVER seviyesinde SESSİZCE ezerdi (canlı doğrulandı, bkz.
+    # CHANGELOG.md) — `php artisan test` bu yüzden `.env.testing`'i hiç
+    # göremiyordu.
     volumes:
       - '.:/var/www/server'
       - '/var/www/server/vendor'

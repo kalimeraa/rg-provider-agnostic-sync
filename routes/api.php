@@ -3,7 +3,6 @@
 use App\Http\Controllers\Api\HealthController;
 use App\Http\Controllers\Api\ProductController;
 use App\Http\Controllers\Api\SyncController;
-use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 
 /*
@@ -17,11 +16,14 @@ use Illuminate\Support\Facades\Route;
 |
 */
 
-Route::middleware('auth:sanctum')->get('/user', function (Request $request) {
-    return $request->user();
-});
+// Laravel iskeletinden gelen `auth:sanctum` + `/user` route'u BİLEREK
+// kaldırıldı: bu proje hiçbir yerde Sanctum token'ı üretmiyor/tüketmiyor
+// (case'in API'si tamamen açık) — kullanılmayan bir route, sadece
+// Authenticate/RedirectIfAuthenticated middleware'lerini anlamsız yere
+// "canlı" (route tablosunda erişilebilir) gösterirdi.
 
-// Case'in istediği 7 endpoint — hepsi ApiResponseTrait zarfıyla döner.
+// Case'in istediği 7 endpoint + dashboard'un "Logları Sil" butonu için
+// eklenen 1 ekstra endpoint — hepsi ApiResponseTrait zarfıyla döner.
 Route::prefix('sync')->group(function () {
     Route::post('/trigger', [SyncController::class, 'trigger']);
     Route::get('/status', [SyncController::class, 'status']);
