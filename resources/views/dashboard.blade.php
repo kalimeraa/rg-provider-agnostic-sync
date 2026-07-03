@@ -69,6 +69,9 @@
         // PHP tarafındaki gerçek Reverb app key'i; ayrı JS dosyasına
         // hardcode etmemek için tek satırlık bir köprü.
         window.REVERB_APP_KEY = @json(config('broadcasting.connections.reverb.key'));
+        // Scheduler'ın gerçek çalışma aralığı (dk) — dashboard'daki "sonraki
+        // otomatik sync" geri sayımı bunu kullanır (bkz. app/Console/Kernel.php).
+        window.SYNC_INTERVAL_MINUTES = @json(config('sync.interval_minutes'));
     </script>
     <script src="{{ asset('js/dashboard.js') }}"></script>
 </body>

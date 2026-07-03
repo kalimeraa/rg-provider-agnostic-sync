@@ -17,6 +17,27 @@
         fakestore: 'FakeStore API',
     };
 
+    // Scheduler her provider'ı `*/{dakika} * * * *` cron'uyla tetikliyor
+    // (bkz. app/Console/Kernel.php) — yani "son sync'ten X dakika sonra"
+    // DEĞİL, saatin dakikası bu sayıya bölünebilir olduğunda (duvar saati
+    // hizalı). Geri sayım da aynı mantıkla, sunucudan ek bir istek atmadan
+    // tamamen istemci tarafında hesaplanır.
+    var SYNC_INTERVAL_MINUTES = window.SYNC_INTERVAL_MINUTES || 5;
+
+    function nextScheduledRunAt() {
+        var intervalMs = SYNC_INTERVAL_MINUTES * 60 * 1000;
+
+        return new Date(Math.ceil((Date.now() + 1000) / intervalMs) * intervalMs);
+    }
+
+    function formatCountdown(ms) {
+        var totalSeconds = Math.max(0, Math.floor(ms / 1000));
+        var m = Math.floor(totalSeconds / 60);
+        var s = totalSeconds % 60;
+
+        return (m < 10 ? '0' : '') + m + ':' + (s < 10 ? '0' : '') + s;
+    }
+
     // ---------------------------------------------------------------
     // Yardımcılar
     // ---------------------------------------------------------------
@@ -93,6 +114,13 @@
 
         var lastSeenAt = lastSync ? formatDate(lastSync.completed_at || lastSync.started_at) : '—';
 
+        // Otomatik (cron) sync'in ne zaman tekrar tetikleneceğini gösteren
+        // canlı geri sayım — tickCountdowns() her saniye sadece bu span'in
+        // içeriğini günceller, karta ait diğer her şey aynı kalır.
+        var countdownLine = p.is_running
+            ? ''
+            : '<p class="text-slate-400 text-xs mt-1">Sonraki otomatik sync: <span class="countdown-value font-mono" data-countdown-for="' + p.provider + '">--:--</span></p>';
+
         return ''
             + '<div class="status-card">'
             + '  <div class="flex items-center justify-between">'
@@ -100,9 +128,15 @@
             + '    <span class="status-pill ' + statusPillClass(effectiveStatus) + '">' + statusLabel(effectiveStatus) + '</span>'
             + '  </div>'
             + '  <p class="text-slate-400 text-xs mt-1">Son çalışma: ' + lastSeenAt + '</p>'
+            +    countdownLine
             +    stats
             +    errorLine
-            + '  <button class="btn mt-4 trigger-btn" data-provider="' + p.provider + '"' + (p.is_running ? ' disabled' : '') + '>'
+            // `disabled`, provider `is_running` olduğunda set edilir — bu bayrak
+            // hem manuel tetiklemeden hem de scheduler'ın otomatik tetiklemesinden
+            // sonra AYNI şekilde true olur (bkz. SyncController::status() —
+            // "running" durumu tetikleyici kaynağı ayırt etmez). Yani otomatik
+            // bir sync çalışırken buton, manuel tetiklemedeki gibi devre dışı kalır.
+            + '  <button class="btn mt-4 trigger-btn" data-provider="' + p.provider + '"' + (p.is_running ? ' disabled title="Otomatik sync çalışıyor"' : '') + '>'
             +      (p.is_running ? '<span class="spinner"></span> Çalışıyor…' : 'Şimdi Senkronize Et')
             + '  </button>'
             + '</div>';
@@ -320,9 +354,26 @@
     }
 
     // ---------------------------------------------------------------
+    // Geri sayım (her saniye sadece span içeriğini günceller — tam
+    // renderStatus() tekrar çalıştırmaz, gereksiz DOM rebuild olmaz)
+    // ---------------------------------------------------------------
+
+    function tickCountdowns() {
+        var remaining = nextScheduledRunAt().getTime() - Date.now();
+        var text = formatCountdown(remaining);
+
+        document.querySelectorAll('[data-countdown-for]').forEach(function (el) {
+            el.textContent = text;
+        });
+    }
+
+    // ---------------------------------------------------------------
     // Boot
     // ---------------------------------------------------------------
 
     loadInitialState().catch(function (e) { console.error('Başlangıç verisi yüklenemedi:', e); });
     connectRealtime();
+
+    tickCountdowns();
+    setInterval(tickCountdowns, 1000);
 })();
