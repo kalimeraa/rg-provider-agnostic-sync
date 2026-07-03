@@ -141,15 +141,15 @@ resources/views/dashboard.blade.php + public/js/dashboard.js + public/css/dashbo
 ### Neden "sayfa-başına-job" mimarisi?
 
 DummyJSON'ın `GET /products` endpoint'i sayfalıdır (`limit`/`skip`/`total`).
-İlk tasarımda tek bir job, `do-while` döngüsüyle tüm sayfaları sırayla
-çekiyordu — ama bu, ürün sayısı arttıkça (veya rate-limit/backoff devreye
-girdikçe) tek bir job'un queue worker timeout'unu aşma riski taşıyordu.
-
-Çözüm: **her sayfa kendi job'u**. `SyncRunCoordinator::start()` önce sadece
+Bir provider'ın verisini tek bir job'un kendi içinde döngüyle çekmesi yerine,
+**her sayfa kendi job'unu** alır: `SyncRunCoordinator::start()` önce sadece
 ilk sayfayı çekip `totalPages`'i öğrenir, sonra `totalPages` kadar
-`FetchProviderPageJob` içeren bir `Bus::batch()` dispatch eder. Bu şekilde:
+`FetchProviderPageJob` içeren bir `Bus::batch()` dispatch eder. Bu tasarımın
+kazandırdıkları:
 
-- Hiçbir job, tüm veriyi tek başına çekmeye çalışmaz → timeout riski yok.
+- Hiçbir job tüm veriyi tek başına çekmeye çalışmaz → ürün sayısı arttıkça
+  veya rate-limit/backoff devreye girdikçe queue worker timeout'una çarpma
+  riski yok.
 - Sayfalar paralel işlenebilir (Horizon `balance: auto` ile birden fazla
   worker process'i).
 - Bir sayfa kalıcı olarak başarısız olursa sadece o sayfa job'u (ve
@@ -328,17 +328,14 @@ job'larda) — bu yüzden **mark-and-sweep** kullanılır:
   soft-delete eder ("sweep") — yani bu run'da HİÇBİR sayfa tarafından
   görülmemiş ürünler.
 
-İlk tasarım saat bazlıydı (`last_synced_at < syncRunStartedAt`) ama
-integration testlerinde **~%50 flaky** çıktı: `Http::fake()` sıfır ağ
-gecikmesi anlamına geliyor, yani art arda çalışan iki run'ın `now()`
-çağrıları container'ın saat çözünürlüğünde çakışabiliyordu. Mikrosaniye
-hassasiyetine çekmek (`Product::$dateFormat`, `timestamp(6)` kolon) bile
-sorunu tam çözmedi — temel sorun saat karşılaştırmasına güvenmekti. Kalıcı
-çözüm: monoton, atomik bir `sync_logs.id` kullanmak — iki run ne kadar hızlı
-art arda çalışırsa çalışsın ID'leri her zaman kesin farklıdır. Aynı
-kök-neden sınıfından `SyncController::status()`/`history()`'deki
-`latest('started_at')` da `latest('id')`'ye çevrildi. Tam teknik döküm:
-[`CHANGELOG.md`](CHANGELOG.md).
+Karar saat (`last_synced_at`) yerine bilinçli olarak monoton bir ID
+(`sync_logs.id`) üzerinden veriliyor: iki run ne kadar hızlı art arda
+çalışırsa çalışsın (ör. testlerde `Http::fake()`'in sıfır ağ gecikmesiyle),
+`now()` çağrıları container'ın saat çözünürlüğünde çakışabilir — saat
+karşılaştırması bu yüzden güvenilir bir sweep kriteri değil. Auto-increment
+ID ise iki run'ı her zaman kesin olarak ayırt eder. Aynı gerekçeyle
+`SyncController::status()`/`history()` da `latest('started_at')` değil
+`latest('id')` kullanır. Tam teknik döküm: [`CHANGELOG.md`](CHANGELOG.md).
 
 Bir sayfa kalıcı başarısız olup batch iptal edilirse sweep BİLİNÇLİ
 olarak çalıştırılmaz — elimizde uzak listenin sadece bir kısmı olur,
