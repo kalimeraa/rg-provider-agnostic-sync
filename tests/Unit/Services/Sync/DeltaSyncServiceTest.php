@@ -17,6 +17,8 @@ use Tests\TestCase;
  * `$syncLogId` parametresi, testlerde farklı "run"ları simüle etmek için
  * her çağrıda ayrı bir tam sayı olarak geçilir (gerçek bir `SyncLog`
  * satırına karşılık gelmesi bu testler için gerekmiyor).
+ *
+ * @covers \App\Services\Sync\DeltaSyncService::upsertPage
  */
 class DeltaSyncServiceTest extends TestCase
 {
@@ -31,8 +33,11 @@ class DeltaSyncServiceTest extends TestCase
         $this->service = app(DeltaSyncService::class);
     }
 
+    /**
+     * Daha önce hiç görülmemiş bir `external_id` eklenmeli, `added=1` dönmeli.
+     */
     #[Test]
-    public function yeni_urunu_ekler(): void
+    public function addsANewProduct(): void
     {
         $result = $this->service->upsertPage(ProviderType::DummyJson, [
             ['external_id' => '1', 'name' => 'Kalem', 'price' => 9.99, 'stock' => 10, 'description' => 'Mavi kalem'],
@@ -48,8 +53,13 @@ class DeltaSyncServiceTest extends TestCase
         ]);
     }
 
+    /**
+     * Hash aynıysa ürün GÜNCELLENMEMELİ (added=0, updated=0) ama
+     * `last_synced_log_id` yine de bu run'a tazelenmeli (mark-and-sweep'in
+     * ürünü "hâlâ görüldü" sayabilmesi için).
+     */
     #[Test]
-    public function hash_ayniysa_urunu_guncellemez_ama_last_synced_bilgisini_tazeler(): void
+    public function unchangedHashSkipsUpdateButRefreshesLastSyncedMarker(): void
     {
         $item = ['external_id' => '1', 'name' => 'Kalem', 'price' => 9.99, 'stock' => 10, 'description' => 'Mavi kalem'];
         $runOne = now()->subMinutes(10);
@@ -68,8 +78,12 @@ class DeltaSyncServiceTest extends TestCase
         $this->assertSame(2, $product->last_synced_log_id);
     }
 
+    /**
+     * İçerik (fiyat, isim, stok, açıklama) değişince ürün güncellenmeli
+     * (updated=1), yeni değerler DB'ye yazılmalı.
+     */
     #[Test]
-    public function icerik_degisince_urunu_gunceller(): void
+    public function updatesProductWhenContentChanges(): void
     {
         $this->service->upsertPage(ProviderType::DummyJson, [
             ['external_id' => '1', 'name' => 'Kalem', 'price' => 9.99, 'stock' => 10, 'description' => 'Mavi kalem'],
@@ -88,8 +102,12 @@ class DeltaSyncServiceTest extends TestCase
         ]);
     }
 
+    /**
+     * Case gereksinimi: idempotency. Aynı ürün iki kez upsert edilse bile
+     * DUPLICATE KAYIT oluşmamalı — unique constraint + upsert garantisi.
+     */
     #[Test]
-    public function iki_kez_calistirilsa_bile_duplicate_kayit_olusturmaz_idempotency(): void
+    public function runningTwiceDoesNotCreateDuplicateRecordsIdempotency(): void
     {
         $item = ['external_id' => '1', 'name' => 'Kalem', 'price' => 9.99, 'stock' => 10, 'description' => 'Mavi kalem'];
 
@@ -99,8 +117,12 @@ class DeltaSyncServiceTest extends TestCase
         $this->assertSame(1, Product::where('provider_type', ProviderType::DummyJson)->where('external_id', '1')->count());
     }
 
+    /**
+     * Daha önce soft-delete edilmiş bir ürün, provider'da tekrar
+     * görününce RESTORE edilmeli (yeni bir kayıt olarak değil).
+     */
     #[Test]
-    public function soft_delete_edilmis_urun_tekrar_gorununce_geri_getirilir(): void
+    public function reappearingProductIsRestoredFromSoftDelete(): void
     {
         $item = ['external_id' => '1', 'name' => 'Kalem', 'price' => 9.99, 'stock' => 10, 'description' => 'Mavi kalem'];
 
@@ -116,8 +138,13 @@ class DeltaSyncServiceTest extends TestCase
         $this->assertNull($product->deleted_at);
     }
 
+    /**
+     * İki farklı provider, AYNI `external_id`'ye sahip ürünleri ayrı ayrı
+     * kayıt olarak tutabilmeli — unique constraint `(provider_type,
+     * external_id)` bileşik olduğu için çakışma olmamalı.
+     */
     #[Test]
-    public function farkli_providerlar_ayni_external_id_ile_ayri_kayit_olusturabilir(): void
+    public function differentProvidersCanShareTheSameExternalId(): void
     {
         $item = ['external_id' => '1', 'name' => 'Kalem', 'price' => 9.99, 'stock' => 10, 'description' => 'Mavi kalem'];
 

@@ -8,6 +8,7 @@ use App\Models\SyncLog;
 use App\Services\Sync\SyncRunCoordinator;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use PHPUnit\Framework\Attributes\Test;
 use Tests\TestCase;
@@ -25,6 +26,9 @@ use Tests\TestCase;
  * kapatma (`Http::fake` closure'ı) her çağrıldığında `$this->currentIds`'i
  * GÜNCEL haliyle okur — bu yüzden testler arasında sadece `$currentIds`'i
  * değiştirmek yeterli, `Http::fake()`'i tekrar çağırmaya gerek yok.
+ *
+ * @covers \App\Services\Sync\SyncRunCoordinator::start
+ * @covers \App\Services\Sync\SyncRunCoordinator::finishSuccessfully
  */
 class SyncIdempotencyAndSweepTest extends TestCase
 {
@@ -74,8 +78,12 @@ class SyncIdempotencyAndSweepTest extends TestCase
         return SyncLog::where('provider_type', ProviderType::DummyJson)->latest('id')->firstOrFail();
     }
 
+    /**
+     * 150 ürün (2 sayfa: 100 + 50) doğru şekilde eklenmeli; batch tam
+     * olarak 2 `FetchProviderPageJob` içermeli.
+     */
     #[Test]
-    public function iki_sayfali_bir_sync_dogru_sekilde_tum_urunleri_ekler(): void
+    public function twoPageSyncAddsAllProductsCorrectly(): void
     {
         $this->currentIds = range(1, 150); // 150 ürün => 2 sayfa (100 + 50)
         $this->fakeDummyJson();
@@ -88,12 +96,16 @@ class SyncIdempotencyAndSweepTest extends TestCase
         $this->assertSame(150, $log->products_added);
         $this->assertSame(150, Product::where('provider_type', ProviderType::DummyJson)->count());
 
-        $batch = \Illuminate\Support\Facades\DB::table('job_batches')->latest('created_at')->first();
+        $batch = DB::table('job_batches')->latest('created_at')->first();
         $this->assertSame(2, $batch->total_jobs, 'Batch tam olarak 2 sayfa job\'u içermeli (150/100 => 2 sayfa).');
     }
 
+    /**
+     * Case gereksinimi: idempotency. Aynı sync run'ı iki kez çalıştırılırsa
+     * ikincide `added=0`/`updated=0` olmalı, duplicate kayıt OLUŞMAMALI.
+     */
     #[Test]
-    public function ayni_sync_iki_kez_calistirilirsa_duplicate_olusmaz_ikincide_added_sifir(): void
+    public function runningTheSameSyncTwiceProducesNoDuplicatesAndZeroAddedOnSecondRun(): void
     {
         $this->currentIds = range(1, 150);
         $this->fakeDummyJson();
@@ -112,8 +124,12 @@ class SyncIdempotencyAndSweepTest extends TestCase
         );
     }
 
+    /**
+     * İçeriği değişen (hash'i bozulan) bir ürün, sıradaki sync'te doğru
+     * hash'e geri güncellenmeli.
+     */
     #[Test]
-    public function icerigi_degisen_urun_ikinci_calistirmada_guncellenir(): void
+    public function productWithChangedContentIsUpdatedOnNextRun(): void
     {
         $this->currentIds = range(1, 10);
         $this->fakeDummyJson();
@@ -135,8 +151,13 @@ class SyncIdempotencyAndSweepTest extends TestCase
         $this->assertSame($originalHash, $product->data_hash);
     }
 
+    /**
+     * Case gereksinimi: "silinen ürünleri tespit etme". Provider'dan artık
+     * dönmeyen bir ürün, mark-and-sweep ile soft-delete edilmeli; DİĞER
+     * ürünler ETKİLENMEMELİ.
+     */
     #[Test]
-    public function providerdan_kaybolan_urun_sweep_ile_soft_delete_edilir(): void
+    public function productMissingFromProviderIsSoftDeletedBySweep(): void
     {
         $this->currentIds = range(1, 150);
         $this->fakeDummyJson();
@@ -154,8 +175,12 @@ class SyncIdempotencyAndSweepTest extends TestCase
         $this->assertSame(149, Product::where('provider_type', ProviderType::DummyJson)->whereNull('deleted_at')->count());
     }
 
+    /**
+     * Sweep ile silinen bir ürün, provider'da TEKRAR görününce restore
+     * edilmeli (yeni bir kayıt olarak değil, `deleted_at` temizlenerek).
+     */
     #[Test]
-    public function silinen_urun_tekrar_gorununce_restore_edilir(): void
+    public function productThatReappearsAfterSweepIsRestored(): void
     {
         $this->currentIds = range(1, 150);
         $this->fakeDummyJson();

@@ -7,12 +7,21 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use PHPUnit\Framework\Attributes\Test;
 use Tests\TestCase;
 
+/**
+ * `GET /api/products` — yerel, salt-okunur ürün listesi endpoint'i.
+ */
 class ProductControllerTest extends TestCase
 {
     use RefreshDatabase;
 
+    /**
+     * Ürünler, case'in zorunlu tuttuğu `meta:{page,per_page,total}` ile
+     * birlikte sayfalanmalı.
+     *
+     * @covers \App\Http\Controllers\Api\ProductController::index
+     */
     #[Test]
-    public function index_pagination_meta_ile_urunleri_doner(): void
+    public function indexReturnsProductsWithPaginationMeta(): void
     {
         Product::factory()->count(25)->create(['provider_type' => 'dummyjson']);
 
@@ -29,8 +38,13 @@ class ProductControllerTest extends TestCase
         $this->assertCount(10, $response->json('data'));
     }
 
+    /**
+     * `?provider=` query parametresi listeyi tek bir provider'a filtrelemeli.
+     *
+     * @covers \App\Http\Controllers\Api\ProductController::index
+     */
     #[Test]
-    public function index_provider_filtresi_calisir(): void
+    public function indexFiltersByProviderQueryParameter(): void
     {
         Product::factory()->count(3)->create(['provider_type' => 'dummyjson']);
         Product::factory()->count(2)->create(['provider_type' => 'fakestore']);
@@ -40,8 +54,14 @@ class ProductControllerTest extends TestCase
         $this->assertSame(2, $response->json('meta.total'));
     }
 
+    /**
+     * Soft-delete edilmiş ürünler listede GÖRÜNMEMELİ — sadece aktif
+     * ürünler dönmeli.
+     *
+     * @covers \App\Http\Controllers\Api\ProductController::index
+     */
     #[Test]
-    public function soft_delete_edilmis_urunler_listede_gorunmez(): void
+    public function softDeletedProductsAreExcludedFromTheList(): void
     {
         Product::factory()->create(['provider_type' => 'dummyjson']);
         $deleted = Product::factory()->create(['provider_type' => 'dummyjson']);

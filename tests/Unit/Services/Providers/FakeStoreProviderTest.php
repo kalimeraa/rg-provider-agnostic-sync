@@ -8,6 +8,10 @@ use Illuminate\Support\Facades\Http;
 use PHPUnit\Framework\Attributes\Test;
 use Tests\TestCase;
 
+/**
+ * FakeStore API (sayfalama yapmayan, tüm ürünleri tek seferde dönen)
+ * provider implementasyonu.
+ */
 class FakeStoreProviderTest extends TestCase
 {
     private function provider(): FakeStoreProvider
@@ -15,8 +19,14 @@ class FakeStoreProviderTest extends TestCase
         return new FakeStoreProvider(new ThrottledHttpClient('test-'.uniqid(), 1000, 5));
     }
 
+    /**
+     * FakeStore sayfalama yapmadığı için TÜM ürünler tek "sayfa"da (page 0,
+     * totalPages=1) dönmeli.
+     *
+     * @covers \App\Services\Providers\FakeStoreProvider::fetchPage
+     */
     #[Test]
-    public function sayfalama_olmadan_tum_urunleri_tek_sayfada_doner(): void
+    public function returnsAllProductsInASinglePageWithoutPagination(): void
     {
         Http::fake([
             '*/products' => Http::response([
@@ -31,8 +41,14 @@ class FakeStoreProviderTest extends TestCase
         $this->assertCount(2, $page->items);
     }
 
+    /**
+     * FakeStore API'sinde `stock` alanı yok (envanter kavramı yok) — sabit
+     * `0` olarak normalize edilmeli.
+     *
+     * @covers \App\Services\Providers\FakeStoreProvider::fetchPage
+     */
     #[Test]
-    public function stock_alani_olmadigi_icin_sabit_0_olarak_normalize_edilir(): void
+    public function normalizesMissingStockFieldToZero(): void
     {
         Http::fake(['*/products' => Http::response([
             ['id' => 1, 'title' => 'Backpack', 'price' => 109.95, 'description' => 'd'],
@@ -45,8 +61,16 @@ class FakeStoreProviderTest extends TestCase
         $this->assertSame('Backpack', $item['name']);
     }
 
+    /**
+     * `SyncRunCoordinator` bu provider için `totalPages=1` gördüğü için
+     * asla `page>0` ile çağırmaz, ama savunma amaçlı: 2. sayfa istenirse
+     * boş bir sonuç dönmeli (tüm veriyi TEKRAR döndürüp duplicate
+     * upsert'e yol açmamalı).
+     *
+     * @covers \App\Services\Providers\FakeStoreProvider::fetchPage
+     */
     #[Test]
-    public function ikinci_sayfa_istenirse_bos_doner(): void
+    public function requestingASecondPageReturnsEmptyItems(): void
     {
         Http::fake(['*/products' => Http::response([
             ['id' => 1, 'title' => 'X', 'price' => 1, 'description' => 'd'],
@@ -58,16 +82,28 @@ class FakeStoreProviderTest extends TestCase
         $this->assertSame(1, $page->totalPages);
     }
 
+    /**
+     * FakeStore, olmayan bir id için 404 değil boş body ile 200 dönüyor
+     * (curl ile doğrulandı) — `fetchOne()` bunu null olarak yorumlamalı.
+     *
+     * @covers \App\Services\Providers\FakeStoreProvider::fetchOne
+     */
     #[Test]
-    public function fetchOne_bos_body_donerse_null_doner(): void
+    public function fetchOneReturnsNullForEmptyBodyResponse(): void
     {
         Http::fake(['*/products/999' => Http::response(null, 200)]);
 
         $this->assertNull($this->provider()->fetchOne('999'));
     }
 
+    /**
+     * Var olan bir ürün için `fetchOne()` doğru şekilde normalize edilmiş
+     * veriyi dönmeli (stock yine sabit 0).
+     *
+     * @covers \App\Services\Providers\FakeStoreProvider::fetchOne
+     */
     #[Test]
-    public function fetchOne_var_olan_urunu_normalize_eder(): void
+    public function fetchOneNormalizesAnExistingProduct(): void
     {
         Http::fake(['*/products/1' => Http::response([
             'id' => 1, 'title' => 'Backpack', 'price' => 109.95, 'description' => 'd',

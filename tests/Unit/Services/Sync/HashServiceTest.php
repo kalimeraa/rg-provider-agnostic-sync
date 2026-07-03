@@ -10,6 +10,8 @@ use Tests\TestCase;
  * Case gereksinimi: "Hash calculation doğruluğu" mutlaka test edilmeli.
  * `HashService` bağımlılıksız (DB/HTTP yok), bu yüzden `TestCase`
  * (Laravel bootstrap'ı) üzerinden ama `RefreshDatabase` OLMADAN çalışır.
+ *
+ * @covers \App\Services\Sync\HashService::hash
  */
 class HashServiceTest extends TestCase
 {
@@ -22,8 +24,11 @@ class HashServiceTest extends TestCase
         $this->hashService = new HashService();
     }
 
+    /**
+     * Aynı input her zaman aynı hash'i üretmeli (deterministik).
+     */
     #[Test]
-    public function ayni_input_ayni_hashi_uretir(): void
+    public function sameInputProducesSameHash(): void
     {
         $product = ['name' => 'Kalem', 'price' => 9.99, 'stock' => 10, 'description' => 'Mavi kalem'];
 
@@ -33,16 +38,22 @@ class HashServiceTest extends TestCase
         );
     }
 
+    /**
+     * Üretilen hash sha256 formatında (64 karakter hex) olmalı.
+     */
     #[Test]
-    public function sha256_formatinda_64_karakter_hex_doner(): void
+    public function producesA64CharacterHexSha256Hash(): void
     {
         $hash = $this->hashService->hash(['name' => 'X', 'price' => 1, 'stock' => 1, 'description' => 'Y']);
 
         $this->assertMatchesRegularExpression('/^[a-f0-9]{64}$/', $hash);
     }
 
+    /**
+     * İsim değişince hash de değişmeli.
+     */
     #[Test]
-    public function isim_degisince_hash_degisir(): void
+    public function hashChangesWhenNameChanges(): void
     {
         $base = ['name' => 'Kalem', 'price' => 9.99, 'stock' => 10, 'description' => 'Mavi kalem'];
         $changed = ['name' => 'Silgi', 'price' => 9.99, 'stock' => 10, 'description' => 'Mavi kalem'];
@@ -50,8 +61,11 @@ class HashServiceTest extends TestCase
         $this->assertNotSame($this->hashService->hash($base), $this->hashService->hash($changed));
     }
 
+    /**
+     * Fiyat değişince hash de değişmeli.
+     */
     #[Test]
-    public function fiyat_degisince_hash_degisir(): void
+    public function hashChangesWhenPriceChanges(): void
     {
         $base = ['name' => 'Kalem', 'price' => 9.99, 'stock' => 10, 'description' => 'Mavi kalem'];
         $changed = ['name' => 'Kalem', 'price' => 12.50, 'stock' => 10, 'description' => 'Mavi kalem'];
@@ -59,8 +73,11 @@ class HashServiceTest extends TestCase
         $this->assertNotSame($this->hashService->hash($base), $this->hashService->hash($changed));
     }
 
+    /**
+     * Stok değişince hash de değişmeli.
+     */
     #[Test]
-    public function stok_degisince_hash_degisir(): void
+    public function hashChangesWhenStockChanges(): void
     {
         $base = ['name' => 'Kalem', 'price' => 9.99, 'stock' => 10, 'description' => 'Mavi kalem'];
         $changed = ['name' => 'Kalem', 'price' => 9.99, 'stock' => 5, 'description' => 'Mavi kalem'];
@@ -68,8 +85,11 @@ class HashServiceTest extends TestCase
         $this->assertNotSame($this->hashService->hash($base), $this->hashService->hash($changed));
     }
 
+    /**
+     * Açıklama değişince hash de değişmeli.
+     */
     #[Test]
-    public function aciklama_degisince_hash_degisir(): void
+    public function hashChangesWhenDescriptionChanges(): void
     {
         $base = ['name' => 'Kalem', 'price' => 9.99, 'stock' => 10, 'description' => 'Mavi kalem'];
         $changed = ['name' => 'Kalem', 'price' => 9.99, 'stock' => 10, 'description' => 'Kırmızı kalem'];
@@ -77,29 +97,37 @@ class HashServiceTest extends TestCase
         $this->assertNotSame($this->hashService->hash($base), $this->hashService->hash($changed));
     }
 
+    /**
+     * Float temsil hassasiyeti farklılıkları (ör. 9.99 vs 9.9900000001),
+     * `number_format` ile 2 ondalığa sabitlendiği için hash'i DEĞİŞTİRMEMELİ.
+     */
     #[Test]
-    public function float_temsil_farkliliklari_hashi_degistirmez(): void
+    public function floatingPointRepresentationDifferencesDoNotChangeTheHash(): void
     {
-        // 9.99 ile 9.990000000000001 gibi kayan nokta artefaktları HashService'in
-        // number_format ile 2 ondalığa sabitlemesi sayesinde AYNI hash'i üretmeli.
         $a = ['name' => 'Kalem', 'price' => 9.99, 'stock' => 10, 'description' => 'Mavi kalem'];
         $b = ['name' => 'Kalem', 'price' => 9.9900000001, 'stock' => 10, 'description' => 'Mavi kalem'];
 
         $this->assertSame($this->hashService->hash($a), $this->hashService->hash($b));
     }
 
+    /**
+     * DB'den decimal cast'li okunan price'lar string olarak da gelebilir —
+     * numeric ve string temsili AYNI hash'i üretmeli.
+     */
     #[Test]
-    public function string_price_de_dogru_islenir(): void
+    public function stringAndNumericPriceProduceTheSameHash(): void
     {
-        // DB'den decimal cast'li okunan price'lar string olarak da gelebilir.
         $numeric = ['name' => 'Kalem', 'price' => 9.99, 'stock' => 10, 'description' => 'Mavi kalem'];
         $string = ['name' => 'Kalem', 'price' => '9.99', 'stock' => 10, 'description' => 'Mavi kalem'];
 
         $this->assertSame($this->hashService->hash($numeric), $this->hashService->hash($string));
     }
 
+    /**
+     * Eksik (`null`) açıklama, boş string ile aynı şekilde işlenmeli.
+     */
     #[Test]
-    public function eksik_aciklama_bos_string_gibi_islenir(): void
+    public function missingDescriptionIsTreatedTheSameAsEmptyString(): void
     {
         $withNull = ['name' => 'Kalem', 'price' => 9.99, 'stock' => 10, 'description' => null];
         $withEmpty = ['name' => 'Kalem', 'price' => 9.99, 'stock' => 10, 'description' => ''];

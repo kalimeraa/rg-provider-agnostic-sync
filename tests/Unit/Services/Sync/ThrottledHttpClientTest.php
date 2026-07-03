@@ -5,6 +5,7 @@ namespace Tests\Unit\Services\Sync;
 use App\Exceptions\Sync\CircuitBreakerOpenException;
 use App\Exceptions\Sync\ProviderRequestException;
 use App\Services\Sync\ThrottledHttpClient;
+use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use PHPUnit\Framework\Attributes\Test;
@@ -31,8 +32,15 @@ class ThrottledHttpClientTest extends TestCase
         return new ThrottledHttpClient('test-'.uniqid(), $rps, $maxFailures);
     }
 
+    /**
+     * Aynı saniyede izin verilenden fazla istek atılırsa, istekler arasına
+     * `1/rate_limit_per_second` kadar bekleme girmeli.
+     *
+     * @covers \App\Services\Sync\ThrottledHttpClient::get
+     * @covers \App\Services\Sync\ThrottledHttpClient::throttle
+     */
     #[Test]
-    public function ayni_saniyede_izin_verilenden_fazla_istek_atarsa_bekler(): void
+    public function moreRequestsThanTheRateLimitPerSecondWaitBetweenCalls(): void
     {
         Http::fake(['*' => Http::response(['ok' => true], 200)]);
 
@@ -47,8 +55,14 @@ class ThrottledHttpClientTest extends TestCase
         $this->assertGreaterThanOrEqual(0.45, $elapsed);
     }
 
+    /**
+     * Yüksek bir rate limitte istekler arasında anlamlı bir bekleme
+     * OLMAMALI — throttle mekanizması hızlı isteklerde ek gecikme katmıyor.
+     *
+     * @covers \App\Services\Sync\ThrottledHttpClient::throttle
+     */
     #[Test]
-    public function yuksek_rate_limitte_beklemeden_hemen_devam_eder(): void
+    public function highRateLimitProceedsWithoutWaiting(): void
     {
         Http::fake(['*' => Http::response(['ok' => true], 200)]);
 
@@ -62,8 +76,13 @@ class ThrottledHttpClientTest extends TestCase
         $this->assertLessThan(0.2, $elapsed);
     }
 
+    /**
+     * Başarılı bir response'un body'si array olarak dönmeli.
+     *
+     * @covers \App\Services\Sync\ThrottledHttpClient::get
+     */
     #[Test]
-    public function dogru_response_body_array_olarak_donuyor(): void
+    public function successfulResponseBodyIsReturnedAsArray(): void
     {
         Http::fake(['*' => Http::response(['products' => [1, 2, 3], 'total' => 3], 200)]);
 
@@ -72,8 +91,14 @@ class ThrottledHttpClientTest extends TestCase
         $this->assertSame(['products' => [1, 2, 3], 'total' => 3], $result);
     }
 
+    /**
+     * 404, hata sayılmamalı (meşru bir "kaynak yok" cevabı) — boş array
+     * dönmeli, ardışık başarısızlık sayacı ARTMAMALI.
+     *
+     * @covers \App\Services\Sync\ThrottledHttpClient::get
+     */
     #[Test]
-    public function s_404_hata_sayilmaz_bos_array_doner(): void
+    public function notFoundResponseIsNotCountedAsFailureAndReturnsEmptyArray(): void
     {
         Http::fake(['*' => Http::response(null, 404)]);
 
@@ -82,8 +107,14 @@ class ThrottledHttpClientTest extends TestCase
         $this->assertSame([], $result);
     }
 
+    /**
+     * 429 yanıtı, `BACKOFF_SECONDS` sırasına (1s, 2s, ...) göre bekleyip
+     * tekrar denenmeli; sonunda başarılı olursa sonucu dönmeli.
+     *
+     * @covers \App\Services\Sync\ThrottledHttpClient::requestWithBackoff
+     */
     #[Test]
-    public function s_429_yanitini_exponential_backoff_ile_tekrar_dener(): void
+    public function tooManyRequestsResponseIsRetriedWithExponentialBackoff(): void
     {
         Http::fake([
             'https://example.test/rate-limited' => Http::sequence()
@@ -103,8 +134,14 @@ class ThrottledHttpClientTest extends TestCase
         $this->assertGreaterThanOrEqual(2.8, $elapsed);
     }
 
+    /**
+     * 429 backoff hakları tükenirse (hâlâ 429 dönüyorsa) `ProviderRequestException`
+     * fırlatılmalı.
+     *
+     * @covers \App\Services\Sync\ThrottledHttpClient::requestWithBackoff
+     */
     #[Test]
-    public function backoff_tukenirse_provider_request_exception_firlar(): void
+    public function exhaustingBackoffAttemptsOnPersistentRateLimitThrowsProviderRequestException(): void
     {
         Http::fake([
             'https://example.test/always-429' => Http::sequence()
@@ -119,8 +156,61 @@ class ThrottledHttpClientTest extends TestCase
         $this->client(rps: 1000)->get('https://example.test/always-429');
     }
 
+    /**
+     * Bağlantı hatası (`ConnectionException`) da 429 gibi backoff ile tekrar
+     * denenmeli — deneme hakkı tükenmeden önce sunucu düzelirse başarılı
+     * sonuç dönmeli.
+     *
+     * @covers \App\Services\Sync\ThrottledHttpClient::requestWithBackoff
+     */
     #[Test]
-    public function ardisik_5_basarisiz_istekten_sonra_circuit_breaker_acilir(): void
+    public function connectionExceptionIsRetriedWithBackoffAndCanStillSucceed(): void
+    {
+        $attempts = 0;
+        Http::fake(function () use (&$attempts) {
+            $attempts++;
+
+            if ($attempts === 1) {
+                throw new ConnectionException('Connection refused');
+            }
+
+            return Http::response(['ok' => true], 200);
+        });
+
+        $result = $this->client(rps: 1000)->get('https://example.test/flaky-connection');
+
+        $this->assertSame(['ok' => true], $result);
+        $this->assertSame(2, $attempts);
+    }
+
+    /**
+     * Bağlantı hatası ardı ardına devam edip backoff hakları (3 deneme)
+     * tükenirse `registerFailure()` tetiklenmeli — `ProviderRequestException`
+     * fırlatılmalı (henüz circuit breaker eşiğine ulaşılmadıysa).
+     *
+     * @covers \App\Services\Sync\ThrottledHttpClient::requestWithBackoff
+     */
+    #[Test]
+    public function exhaustingBackoffAttemptsOnPersistentConnectionExceptionRegistersFailure(): void
+    {
+        Http::fake(function () {
+            throw new ConnectionException('Connection refused');
+        });
+
+        $this->expectException(ProviderRequestException::class);
+
+        $this->client(rps: 1000, maxFailures: 5)->get('https://example.test/always-down');
+    }
+
+    /**
+     * Ardışık `maxFailures` (varsayılan 5) başarısız istekten sonra circuit
+     * breaker açılmalı — `CircuitBreakerOpenException` fırlatılmalı ve
+     * ardışık sayıyı yapılandırılmış bir alan olarak taşımalı.
+     *
+     * @covers \App\Services\Sync\ThrottledHttpClient::registerFailure
+     */
+    #[Test]
+    public function fiveConsecutiveFailuresOpenTheCircuitBreaker(): void
     {
         Http::fake(['https://example.test/broken' => Http::response(['error' => 1], 500)]);
 
@@ -145,8 +235,16 @@ class ThrottledHttpClientTest extends TestCase
         }
     }
 
+    /**
+     * Başarılı bir istek, ardışık hata sayacını sıfırlamalı — sayaç
+     * sıfırlanmasaydı hemen ardından gelen 4 hata YANLIŞLIKLA circuit
+     * breaker'ı açardı.
+     *
+     * @covers \App\Services\Sync\ThrottledHttpClient::get
+     * @covers \App\Services\Sync\ThrottledHttpClient::registerFailure
+     */
     #[Test]
-    public function basarili_istek_ardisik_hata_sayacini_sifirlar(): void
+    public function successfulRequestResetsConsecutiveFailureCounter(): void
     {
         Http::fake([
             'https://example.test/flaky' => Http::sequence()

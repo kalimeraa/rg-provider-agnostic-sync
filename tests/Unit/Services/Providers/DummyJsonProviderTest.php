@@ -8,6 +8,9 @@ use Illuminate\Support\Facades\Http;
 use PHPUnit\Framework\Attributes\Test;
 use Tests\TestCase;
 
+/**
+ * DummyJSON (`limit`/`skip`/`total` sayfalamalı) provider implementasyonu.
+ */
 class DummyJsonProviderTest extends TestCase
 {
     private function provider(): DummyJsonProvider
@@ -15,8 +18,14 @@ class DummyJsonProviderTest extends TestCase
         return new DummyJsonProvider(new ThrottledHttpClient('test-'.uniqid(), 1000, 5));
     }
 
+    /**
+     * Ham DummyJSON ürün şekli ortak normalize şekline çevrilmeli; volatile
+     * alanlar (rating, category, images) sonuca DAHİL EDİLMEMELİ.
+     *
+     * @covers \App\Services\Providers\DummyJsonProvider::fetchPage
+     */
     #[Test]
-    public function ham_urunu_ortak_normalize_seklinede_cevirir(): void
+    public function normalizesRawItemIntoTheSharedProductShape(): void
     {
         Http::fake([
             '*/products*' => Http::response([
@@ -27,7 +36,6 @@ class DummyJsonProviderTest extends TestCase
                         'price' => 9.99,
                         'stock' => 99,
                         'description' => 'Açıklama',
-                        // Volatile alanlar — normalize sonucuna DAHİL OLMAMALI:
                         'rating' => 4.5,
                         'category' => 'beauty',
                         'images' => ['a.png'],
@@ -49,8 +57,13 @@ class DummyJsonProviderTest extends TestCase
         ], $page->items[0]);
     }
 
+    /**
+     * `total`'dan sayfa boyutuna (100) göre doğru sayfa sayısı hesaplanmalı.
+     *
+     * @covers \App\Services\Providers\DummyJsonProvider::fetchPage
+     */
     #[Test]
-    public function totaldan_dogru_sayfa_sayisini_hesaplar(): void
+    public function calculatesTotalPagesFromReportedTotal(): void
     {
         Http::fake(['*/products*' => Http::response(['products' => [], 'total' => 194], 200)]);
 
@@ -58,24 +71,43 @@ class DummyJsonProviderTest extends TestCase
         $this->assertSame(2, $this->provider()->fetchPage(0)->totalPages);
     }
 
+    /**
+     * `total=0` olsa bile en az 1 sayfa dönmeli (sıfır sayfalı bir batch
+     * anlamsız olurdu).
+     *
+     * @covers \App\Services\Providers\DummyJsonProvider::fetchPage
+     */
     #[Test]
-    public function total_sifirsa_en_az_1_sayfa_doner(): void
+    public function zeroTotalStillReportsAtLeastOnePage(): void
     {
         Http::fake(['*/products*' => Http::response(['products' => [], 'total' => 0], 200)]);
 
         $this->assertSame(1, $this->provider()->fetchPage(0)->totalPages);
     }
 
+    /**
+     * Var olmayan bir ürün id'si için `fetchOne()` null dönmeli (gerçek
+     * DummyJSON 404 döndürüyor, `ThrottledHttpClient` bunu boş array'e
+     * çeviriyor).
+     *
+     * @covers \App\Services\Providers\DummyJsonProvider::fetchOne
+     */
     #[Test]
-    public function fetchOne_olmayan_urun_icin_null_doner(): void
+    public function fetchOneReturnsNullForNonExistentProduct(): void
     {
         Http::fake(['*/products/999' => Http::response(['message' => "Product with id '999' not found"], 404)]);
 
         $this->assertNull($this->provider()->fetchOne('999'));
     }
 
+    /**
+     * Var olan bir ürün için `fetchOne()` doğru şekilde normalize edilmiş
+     * veriyi dönmeli.
+     *
+     * @covers \App\Services\Providers\DummyJsonProvider::fetchOne
+     */
     #[Test]
-    public function fetchOne_var_olan_urunu_normalize_eder(): void
+    public function fetchOneNormalizesAnExistingProduct(): void
     {
         Http::fake(['*/products/1' => Http::response([
             'id' => 1, 'title' => 'X', 'price' => 5, 'stock' => 2, 'description' => 'd',
