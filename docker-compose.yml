@@ -1,0 +1,148 @@
+services:
+
+  webserver:
+    container_name: webserver
+    image: nginx:alpine
+    restart: unless-stopped
+    depends_on:
+      - server
+      - reverb
+    ports:
+      - '${APP_PORT:-8080}:80'
+    volumes:
+      - ./:/var/www/server
+      - './docker/nginx/conf.d/:/etc/nginx/conf.d/'
+    networks:
+      - app-network
+
+  server:
+    container_name: server
+    restart: always
+    build:
+      context: .
+      dockerfile: ./docker/server.Dockerfile
+    working_dir: /var/www/server
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    env_file: .env
+    volumes:
+      - '.:/var/www/server'
+      - '/var/www/server/vendor'
+      - './docker/php/local.ini:/usr/local/etc/php/conf.d/local.ini'
+    networks:
+      - app-network
+
+  # Horizon (queue) VE scheduler (schedule:work) aynı container'da,
+  # supervisord altında iki ayrı process olarak çalışır — bkz.
+  # docker/supervisord/{supervisord.conf,horizon.conf}. Ayrı bir
+  # "scheduler" container'ı YOK: uniqueness zaten job seviyesinde
+  # (ShouldBeUnique) çözülüyor, iki container'a bölmenin ek bir faydası yok.
+  worker:
+    container_name: worker
+    restart: always
+    build:
+      context: .
+      dockerfile: ./docker/server.Dockerfile
+    working_dir: /var/www/server
+    command: supervisord -c /etc/supervisor/supervisord.conf
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    env_file: .env
+    volumes:
+      - '.:/var/www/server'
+      - '/var/www/server/vendor'
+      - './docker/php/local.ini:/usr/local/etc/php/conf.d/local.ini'
+    networks:
+      - app-network
+
+  # Dashboard'daki gerçek-zamanlı güncellemeler (sync durumu vb.) için
+  # WebSocket sunucusu. Host'a doğrudan bir port açmıyor — nginx (webserver
+  # container'ı) /app/ altında buraya proxy yapıyor, böylece tarayıcı sadece
+  # tek bir host/port'a (APP_PORT) bağlanıyor. Şimdilik SSL yok, düz ws://.
+  reverb:
+    container_name: reverb
+    restart: always
+    build:
+      context: .
+      dockerfile: ./docker/server.Dockerfile
+    working_dir: /var/www/server
+    command: php artisan reverb:start --host=0.0.0.0 --port=8080
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    env_file: .env
+    volumes:
+      - '.:/var/www/server'
+      - '/var/www/server/vendor'
+      - './docker/php/local.ini:/usr/local/etc/php/conf.d/local.ini'
+    networks:
+      - app-network
+
+  db:
+    container_name: db
+    restart: always
+    image: 'mysql:8.0'
+    ports:
+      - '3306:3306'
+    environment:
+      MYSQL_ROOT_PASSWORD: '${DB_PASSWORD}'
+      MYSQL_DATABASE: '${DB_DATABASE}'
+      MYSQL_USER: '${DB_USERNAME}'
+      MYSQL_PASSWORD: '${DB_PASSWORD}'
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${DB_PASSWORD}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - app-network
+
+  # Testler (phpunit.xml) buraya karşı çalışır — SQLite DEĞİL, üretimle aynı
+  # motor (MySQL) kullanılır ki motor-spesifik davranış farkları testlerde
+  # yakalanabilsin. Ayrı bir container/port (3307) ile `db`'den izole.
+  db_test:
+    container_name: db_test
+    restart: unless-stopped
+    image: 'mysql:8.0'
+    ports:
+      - '3307:3306'
+    environment:
+      MYSQL_ROOT_PASSWORD: '${DB_PASSWORD}'
+      MYSQL_DATABASE: '${DB_TEST_DATABASE:-product_sync_test}'
+      MYSQL_USER: '${DB_USERNAME}'
+      MYSQL_PASSWORD: '${DB_PASSWORD}'
+    volumes:
+      - mysql_test_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${DB_PASSWORD}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - app-network
+
+  redis:
+    container_name: redis
+    image: redis:7-alpine
+    ports:
+      - '6379:6379'
+    networks:
+      - app-network
+
+volumes:
+  mysql_data:
+  mysql_test_data:
+
+networks:
+  app-network:
+    driver: bridge
