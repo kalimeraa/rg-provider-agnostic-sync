@@ -9,7 +9,8 @@ use Illuminate\Support\Facades\DB;
 
 /**
  * Tek bir sayfalık normalize edilmiş ürün listesini hash-bazlı olarak DB'ye
- * upsert eder (ekle/güncelle/değişmediyse sadece `last_synced_at`'i tazele).
+ * upsert eder (ekle/güncelle/değişmediyse sadece "en son görüldü" bilgisini
+ * tazele).
  *
  * **SİLME MANTIĞI BİLEREK BURADA YOK.** Eskiden (tek job'lu mimaride) bu
  * servis TÜM uzak listeyi görüp DB'de karşılığı olmayanları tek seferde
@@ -18,10 +19,16 @@ use Illuminate\Support\Facades\DB;
  * TEK ÇAĞRI uzak listenin TAMAMINI görmüyor — sadece kendi sayfasını. Silme
  * tespiti bu yüzden bir "mark-and-sweep" ile `SyncRunCoordinator`'ın TÜM
  * sayfa job'ları bittikten SONRA çalıştırdığı ayrı bir adıma taşındı: her
- * upsert `last_synced_at`'i bu sync run'a özel SABİT bir zaman damgasıyla
- * (`$syncRunStartedAt`, her item için değil, tüm run için aynı) işaretler;
- * run tamamlanınca bu damgadan daha eski `last_synced_at`'e sahip ürünler
- * ("bu run'da hiçbir sayfa tarafından dokunulmadı" demektir) silinir.
+ * upsert, ürünü bu run'ın `SyncLog` id'siyle (`last_synced_log_id`) işaretler;
+ * run tamamlanınca bu id'den FARKLI (yani bu run'da hiçbir sayfa tarafından
+ * dokunulmamış) ürünler silinir.
+ *
+ * Not: işaretleyici olarak saat (`last_synced_at`) DEĞİL, monoton bir
+ * `SyncLog.id` kullanılır — `Http::fake()` ile gerçek ağ gecikmesi olmadan
+ * art arda çok hızlı çalışan iki run, container'ın saat çözünürlüğü
+ * yüzünden aynı mikrosaniyeye bile denk gelebiliyordu (integration
+ * testleriyle canlı yakalandı, bkz. CHANGELOG.md) — ID karşılaştırması bu
+ * riski tamamen ortadan kaldırır.
  */
 class DeltaSyncService
 {
@@ -39,7 +46,7 @@ class DeltaSyncService
      * @param  array<int, array{external_id: string, name: string, price: float, stock: int, description: string}>  $items
      * @return array{added: int, updated: int}
      */
-    public function upsertPage(ProviderType $provider, array $items, CarbonInterface $syncRunStartedAt): array
+    public function upsertPage(ProviderType $provider, array $items, CarbonInterface $syncRunStartedAt, int $syncLogId): array
     {
         $added = 0;
         $updated = 0;
@@ -47,7 +54,7 @@ class DeltaSyncService
         foreach ($items as $item) {
             $hash = $this->hashService->hash($item);
 
-            DB::transaction(function () use ($provider, $item, $hash, $syncRunStartedAt, &$added, &$updated) {
+            DB::transaction(function () use ($provider, $item, $hash, $syncRunStartedAt, $syncLogId, &$added, &$updated) {
                 $current = Product::withTrashed()
                     ->where('provider_type', $provider)
                     ->where('external_id', $item['external_id'])
@@ -64,6 +71,7 @@ class DeltaSyncService
                         'description' => $item['description'],
                         'data_hash' => $hash,
                         'last_synced_at' => $syncRunStartedAt,
+                        'last_synced_log_id' => $syncLogId,
                     ]);
 
                     $added++;
@@ -86,12 +94,16 @@ class DeltaSyncService
                         'description' => $item['description'],
                         'data_hash' => $hash,
                         'last_synced_at' => $syncRunStartedAt,
+                        'last_synced_log_id' => $syncLogId,
                     ]);
 
                     $updated++;
                 } else {
-                    // İçerik değişmedi; yine de "bu run'da görüldü" damgasını işle (sweep adımı için).
-                    $current->forceFill(['last_synced_at' => $syncRunStartedAt])->save();
+                    // İçerik değişmedi; yine de "bu run'da görüldü" işaretini yenile (sweep adımı için).
+                    $current->forceFill([
+                        'last_synced_at' => $syncRunStartedAt,
+                        'last_synced_log_id' => $syncLogId,
+                    ])->save();
                 }
             });
         }

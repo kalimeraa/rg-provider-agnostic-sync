@@ -34,6 +34,7 @@ class Product extends Model
         'description',
         'data_hash',
         'last_synced_at',
+        'last_synced_log_id',
     ];
 
     /**
@@ -46,5 +47,17 @@ class Product extends Model
         'price' => 'decimal:2',
         'stock' => 'integer',
         'last_synced_at' => 'datetime',
+        'last_synced_log_id' => 'integer',
     ];
+
+    /**
+     * Eloquent varsayılan olarak tarihleri DB'ye saniye hassasiyetinde
+     * (`Y-m-d H:i:s`) yazar. `last_synced_at` sadece insan-okunur bilgi
+     * amaçlı olsa da mikrosaniye hassasiyeti tutarlılık için korunur;
+     * SİLME KARARI ARTIK BUNA DAYANMIYOR (bkz. `last_synced_log_id` ve
+     * SyncRunCoordinator'ın PHPDoc'u — saat yerine monoton bir ID kullanmak,
+     * Http::fake ile gerçek gecikme olmadan art arda çalışan run'ların
+     * container'ın saat çözünürlüğünde çakışma riskini ortadan kaldırır).
+     */
+    protected $dateFormat = 'Y-m-d H:i:s.u';
 }

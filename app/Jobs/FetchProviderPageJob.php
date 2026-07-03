@@ -67,7 +67,7 @@ class FetchProviderPageJob implements ShouldQueue
 
         try {
             $page = $providerFactory->make($this->provider)->fetchPage($this->page);
-            $result = $deltaSyncService->upsertPage($this->provider, $page->items, $this->syncRunStartedAt);
+            $result = $deltaSyncService->upsertPage($this->provider, $page->items, $this->syncRunStartedAt, $this->syncLogId);
 
             $coordinator->recordPageResult($this->syncLogId, $result['added'], $result['updated']);
         } catch (CircuitBreakerOpenException $e) {

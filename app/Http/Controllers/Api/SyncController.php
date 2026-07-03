@@ -63,9 +63,14 @@ class SyncController extends Controller
                 ->whereNull('completed_at')
                 ->exists();
 
+            // latest('id') — latest('started_at') DEĞİL: `started_at` saniye
+            // hassasiyetinde (MySQL timestamp) ve art arda hızlı çalışan iki
+            // run aynı saniyeye denk gelebilir; `id` monoton ve her zaman
+            // gerçek oluşturulma sırasını yansıtır (integration testleriyle
+            // canlı yakalanan bir hataydı — bkz. CHANGELOG.md).
             $lastSync = SyncLog::where('provider_type', $provider)
                 ->whereIn('status', ['completed', 'failed'])
-                ->latest('started_at')
+                ->latest('id')
                 ->first();
 
             return [
@@ -92,7 +97,7 @@ class SyncController extends Controller
                 $request->query('provider'),
                 fn ($query, $provider) => $query->where('provider_type', $provider)
             )
-            ->latest('started_at')
+            ->latest('id') // bkz. status() metodundaki latest('id') açıklaması
             ->paginate($perPage);
 
         return $this->paginated(SyncLogResource::collection($logs->items()), $logs);

@@ -4,6 +4,7 @@ namespace App\Services\Sync;
 
 use App\DTOs\SyncResult;
 use App\Enums\ProviderType;
+use App\Events\SyncStatusUpdated;
 use App\Exceptions\Sync\CircuitBreakerOpenException;
 use App\Exceptions\Sync\PaginationLimitExceededException;
 use App\Jobs\FetchProviderPageJob;
@@ -35,9 +36,12 @@ use Throwable;
  * 2. **Silme tespiti**: artık hiçbir tek çağrı uzak listenin TAMAMINI
  *    görmüyor (bkz. DeltaSyncService'in PHPDoc'u) — bu yüzden `then()`
  *    (TÜM sayfalar başarıyla bitince) bir "sweep" adımı çalıştırır: bu
- *    run'ın sabit başlangıç zaman damgasından (`$syncRunStartedAt`) daha
- *    eski `last_synced_at`'e sahip ürünler (= bu run'da hiçbir sayfa
- *    tarafından dokunulmadı) soft-delete edilir.
+ *    run'ın `SyncLog.id`'sinden FARKLI bir `last_synced_log_id`'ye sahip
+ *    ürünler (= bu run'da hiçbir sayfa tarafından dokunulmadı) soft-delete
+ *    edilir. Saat yerine ID kullanılır çünkü `Http::fake()` ile gerçek ağ
+ *    gecikmesi olmadan art arda çalışan run'lar container'ın saat
+ *    çözünürlüğü yüzünden aynı mikrosaniyeye denk gelebiliyordu (integration
+ *    testleriyle canlı yakalandı) — ID karşılaştırması bunu imkansız kılar.
  * 3. **Sayaç toplama**: her sayfa job'unun kendi added/updated sayısı,
  *    run bitince tek bir `SyncResult`'ta toplanabilsin diye Redis'te
  *    (`SyncLog` id'sine göre) atomik olarak biriktirilir.
@@ -90,6 +94,10 @@ class SyncRunCoordinator
             'status' => 'running',
         ]);
 
+        // Dashboard'un "şu an çalışıyor" durumunu HTTP polling beklemeden anında
+        // görebilmesi için — run daha yeni başlarken bile (sonucunu değil).
+        SyncStatusUpdated::dispatch($provider, 'running', $syncRunStartedAt->toIso8601String());
+
         try {
             $firstPage = $this->providerFactory->make($provider)->fetchPage(0);
 
@@ -120,6 +128,14 @@ class SyncRunCoordinator
                 'completed_at' => now(),
                 'error_message' => $e->getMessage(),
             ]);
+
+            SyncStatusUpdated::dispatch(
+                $provider,
+                'failed',
+                $syncRunStartedAt->toIso8601String(),
+                now()->toIso8601String(),
+                errorMessage: $e->getMessage(),
+            );
 
             $lock->release();
 
@@ -152,7 +168,7 @@ class SyncRunCoordinator
     {
         $deleted = Product::where('provider_type', $provider)
             ->whereNull('deleted_at')
-            ->where('last_synced_at', '<', $syncRunStartedAt)
+            ->where('last_synced_log_id', '<>', $syncLogId)
             ->get()
             ->each(fn (Product $product) => $product->delete())
             ->count();
@@ -176,6 +192,16 @@ class SyncRunCoordinator
         $this->alerts->recordSyncSuccess($provider);
         $this->alerts->checkQueueBacklog();
 
+        SyncStatusUpdated::dispatch(
+            $provider,
+            'completed',
+            $syncRunStartedAt->toIso8601String(),
+            now()->toIso8601String(),
+            $result->added,
+            $result->updated,
+            $result->deleted,
+        );
+
         $this->releaseLock($provider, $lockOwner);
     }
 
@@ -189,9 +215,16 @@ class SyncRunCoordinator
     {
         $this->forgetCounters($syncLogId);
 
-        SyncLog::whereKey($syncLogId)->update([
+        $completedAt = now();
+
+        // Carbon cast'li `started_at`'e erişmek için tam model çekiliyor
+        // (query builder'ın ->value() metodu cast'leri atlayıp ham DB
+        // değerini döner — o zaman toIso8601String() çağrısı patlardı).
+        $log = SyncLog::findOrFail($syncLogId);
+
+        $log->update([
             'status' => 'failed',
-            'completed_at' => now(),
+            'completed_at' => $completedAt,
             'error_message' => $e->getMessage(),
         ]);
 
@@ -201,6 +234,14 @@ class SyncRunCoordinator
 
         $this->alerts->recordSyncFailure($provider);
         $this->alerts->checkQueueBacklog();
+
+        SyncStatusUpdated::dispatch(
+            $provider,
+            'failed',
+            $log->started_at?->toIso8601String(),
+            $completedAt->toIso8601String(),
+            errorMessage: $e->getMessage(),
+        );
 
         $this->releaseLock($provider, $lockOwner);
     }
