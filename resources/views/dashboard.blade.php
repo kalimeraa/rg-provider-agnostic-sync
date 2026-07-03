@@ -22,7 +22,10 @@
         </section>
 
         <section class="mb-8">
-            <h2 class="text-lg font-semibold mb-2">Sync Geçmişi</h2>
+            <div class="flex items-center justify-between mb-2">
+                <h2 class="text-lg font-semibold">Sync Geçmişi</h2>
+                <button id="clear-history-btn" class="btn btn-sm btn-danger">Logları Sil</button>
+            </div>
             <div class="overflow-x-auto bg-white rounded-lg shadow">
                 <table class="w-full text-sm">
                     <thead>
@@ -42,6 +45,7 @@
                     </tbody>
                 </table>
             </div>
+            <div id="history-pagination" class="flex items-center justify-between mt-2 text-xs text-slate-500"></div>
         </section>
 
         <section>

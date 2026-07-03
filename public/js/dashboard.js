@@ -3,12 +3,16 @@
 
     var API_BASE = '/api';
 
+    var HISTORY_PER_PAGE = 10;
+
     // Tüm ekranın tek kaynağı: ilk HTTP yüklemesi de, canlı socket
     // event'leri de hep BU state'i güncelleyip aynı render fonksiyonlarını
     // çağırır — iki ayrı kod yolu (ilk yükleme / canlı güncelleme) yok.
     var state = {
         status: {},     // providerValue -> {provider, is_running, last_sync}
-        history: [],    // en yeni önce, en fazla 10 satır
+        history: [],    // GÖRÜNTÜLENEN sayfanın satırları (en yeni önce)
+        historyPage: 1, // 1 = en yeni; sonraki sayfalar geçmişe (başa) doğru gider
+        historyMeta: { page: 1, per_page: HISTORY_PER_PAGE, total: 0 },
         failedJobs: [], // en yeni önce, en fazla 10 satır
     };
 
@@ -147,10 +151,11 @@
 
         if (state.history.length === 0) {
             body.innerHTML = '<tr><td class="p-3 text-slate-400" colspan="8">Henüz kayıt yok.</td></tr>';
+            renderHistoryPagination();
             return;
         }
 
-        body.innerHTML = state.history.slice(0, 10).map(function (row) {
+        body.innerHTML = state.history.map(function (row) {
             return ''
                 + '<tr class="border-b last:border-0 fade-in-row">'
                 + '  <td class="p-3">' + (PROVIDER_LABELS[row.provider] || row.provider) + '</td>'
@@ -163,6 +168,24 @@
                 + '  <td class="p-3 text-rose-600 text-xs max-w-[200px] truncate" title="' + escapeHtml(row.error_message || '') + '">' + (row.error_message ? escapeHtml(row.error_message) : '—') + '</td>'
                 + '</tr>';
         }).join('');
+
+        renderHistoryPagination();
+    }
+
+    // "Sonraki" (›) geçmişe/başa doğru ilerler (daha eski kayıtlar), "Önceki"
+    // (‹) en yeniye doğru geri döner — sayfa 1 her zaman en yeni 10 kayıt.
+    function renderHistoryPagination() {
+        var container = document.getElementById('history-pagination');
+        var meta = state.historyMeta;
+        var totalPages = Math.max(1, Math.ceil(meta.total / meta.per_page));
+
+        container.innerHTML = ''
+            + '<span>' + meta.total + ' kayıt</span>'
+            + '<div class="flex items-center gap-2">'
+            + '  <button class="pagination-btn" data-history-page="prev"' + (meta.page <= 1 ? ' disabled' : '') + '>‹ Önceki</button>'
+            + '  <span>Sayfa ' + meta.page + ' / ' + totalPages + '</span>'
+            + '  <button class="pagination-btn" data-history-page="next"' + (meta.page >= totalPages ? ' disabled' : '') + '>Sonraki ›</button>'
+            + '</div>';
     }
 
     function renderFailedJobs() {
@@ -199,7 +222,14 @@
     // Aynı provider+started_at'e sahip bir satır zaten varsa (ör. "running"
     // olarak eklenmişti) günceller, yoksa başa ekler — "running" -> "completed"
     // geçişinde geçmiş tablosunda YENİ bir satır değil, AYNI satır güncellenir.
+    // Sadece 1. sayfadayken (en yeni kayıtlar) uygulanır: kullanıcı geçmişte
+    // daha eski bir sayfayı incelerken, arka planda tetiklenen yeni bir sync
+    // görünümünü aniden değiştirmemeli — 1. sayfaya dönünce zaten güncel olur.
     function upsertHistoryRow(payload) {
+        if (state.historyPage !== 1) {
+            return;
+        }
+
         var idx = -1;
 
         for (var i = 0; i < state.history.length; i++) {
@@ -213,9 +243,10 @@
             state.history[idx] = Object.assign({}, state.history[idx], payload);
         } else {
             state.history.unshift(payload);
+            state.history = state.history.slice(0, HISTORY_PER_PAGE);
+            state.historyMeta.total += 1;
         }
 
-        state.history = state.history.slice(0, 10);
         renderHistory();
     }
 
@@ -266,17 +297,33 @@
     function loadInitialState() {
         return Promise.all([
             fetchJson(API_BASE + '/sync/status'),
-            fetchJson(API_BASE + '/sync/history?per_page=10'),
             fetchJson(API_BASE + '/sync/failed-jobs?per_page=10'),
         ]).then(function (results) {
             setProviderStatus(results[0].data);
 
-            state.history = results[1].data;
-            renderHistory();
-
-            state.failedJobs = results[2].data;
+            state.failedJobs = results[1].data;
             renderFailedJobs();
         });
+    }
+
+    function loadHistoryPage(page) {
+        return fetchJson(API_BASE + '/sync/history?per_page=' + HISTORY_PER_PAGE + '&page=' + page)
+            .then(function (body) {
+                state.history = body.data;
+                state.historyPage = body.meta.page;
+                state.historyMeta = body.meta;
+                renderHistory();
+            })
+            .catch(function (e) { console.error('Sync geçmişi yüklenemedi:', e); });
+    }
+
+    function clearHistory() {
+        if (!confirm('Sync geçmişindeki tüm loglar silinsin mi? Bu işlem geri alınamaz.')) {
+            return;
+        }
+
+        fetchJson(API_BASE + '/sync/history', { method: 'DELETE' })
+            .catch(function (e) { alert('Geçmiş temizlenemedi: ' + e.message); });
     }
 
     function triggerSync(provider) {
@@ -312,6 +359,19 @@
         if (retryBtn) {
             retryBtn.disabled = true;
             retryJob(retryBtn.dataset.uuid);
+            return;
+        }
+
+        if (event.target.id === 'clear-history-btn') {
+            clearHistory();
+            return;
+        }
+
+        var pageBtn = event.target.closest('[data-history-page]');
+
+        if (pageBtn && !pageBtn.disabled) {
+            var nextPage = pageBtn.dataset.historyPage === 'next' ? state.historyPage + 1 : state.historyPage - 1;
+            loadHistoryPage(nextPage);
         }
     });
 
@@ -351,6 +411,13 @@
 
         channel.bind('sync-status.updated', applyLiveSyncUpdate);
         channel.bind('failed-job.recorded', prependFailedJob);
+        // Logları Sil, isteği atan sekmeyle sınırlı kalmasın diye kanaldan
+        // yayınlanıyor — dashboard'u açık tutan HERKES 1. sayfaya (boş
+        // tabloya) döner, sadece butona basan kişi değil.
+        channel.bind('sync-history.cleared', function () {
+            state.historyPage = 1;
+            loadHistoryPage(1);
+        });
     }
 
     // ---------------------------------------------------------------
@@ -372,6 +439,7 @@
     // ---------------------------------------------------------------
 
     loadInitialState().catch(function (e) { console.error('Başlangıç verisi yüklenemedi:', e); });
+    loadHistoryPage(1);
     connectRealtime();
 
     tickCountdowns();

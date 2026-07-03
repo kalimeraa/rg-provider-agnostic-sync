@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Enums\ProviderType;
+use App\Events\SyncHistoryCleared;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\TriggerSyncRequest;
 use App\Http\Resources\SyncLogResource;
@@ -101,6 +102,29 @@ class SyncController extends Controller
             ->paginate($perPage);
 
         return $this->paginated(SyncLogResource::collection($logs->items()), $logs);
+    }
+
+    /**
+     * `DELETE /api/sync/history` — geçmiş sync loglarını temizler.
+     * `status = running` olan satırlar BİLEREK silinmez: o an devam eden
+     * bir run varsa, `SyncRunCoordinator`'ın run sonunda güncellemeye
+     * çalışacağı `sync_logs` satırı hâlâ var olmalı (aksi halde
+     * `finishSuccessfully()`/`finishWithFailure()`'daki `update()` çağrısı
+     * sessizce hiçbir satırı etkilemez, dashboard o run'ın sonucunu asla
+     * göremez). Dashboard'u açık tutan HERKESİN tablosunun anında
+     * boşalması için `SyncHistoryCleared` aynı `sync-status` kanalında
+     * yayınlanır.
+     */
+    public function clearHistory(): JsonResponse
+    {
+        $deleted = SyncLog::where('status', '!=', 'running')->delete();
+
+        SyncHistoryCleared::dispatch();
+
+        return $this->success(
+            data: ['deleted' => $deleted],
+            message: 'Sync geçmişi temizlendi',
+        );
     }
 
     /**

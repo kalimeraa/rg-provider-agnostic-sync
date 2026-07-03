@@ -26,6 +26,7 @@ Route::prefix('sync')->group(function () {
     Route::post('/trigger', [SyncController::class, 'trigger']);
     Route::get('/status', [SyncController::class, 'status']);
     Route::get('/history', [SyncController::class, 'history']);
+    Route::delete('/history', [SyncController::class, 'clearHistory']);
     Route::get('/failed-jobs', [SyncController::class, 'failedJobs']);
     // {jobId} = failed_jobs.uuid (numeric id DEĞİL — bkz. SyncController::retry() PHPDoc'u).
     Route::post('/retry/{jobId}', [SyncController::class, 'retry'])->whereUuid('jobId');
