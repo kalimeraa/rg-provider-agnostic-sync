@@ -3,13 +3,18 @@
 namespace App\Services\Providers;
 
 use App\Contracts\ProviderClientInterface;
+use App\DTOs\ProviderPage;
 use App\Services\Sync\ThrottledHttpClient;
-use Illuminate\Support\Collection;
 
 /**
  * DummyJSON (https://dummyjson.com/products) için ProviderClientInterface
- * implementasyonu. API `limit`/`skip`/`total` ile sayfalama yapıyor
- * (şu an ~194 ürün); `fetchAll()` `total`'a ulaşana kadar sayfa sayfa çeker.
+ * implementasyonu. API `limit`/`skip`/`total` ile sayfalama yapıyor (şu an
+ * ~194 ürün, `PAGE_SIZE`=100 ile 2 sayfa). Sayfalama artık bu class'ın
+ * KENDİ İÇİNDE bir döngü değil — her sayfa `SyncRunCoordinator` tarafından
+ * ayrı bir `FetchProviderPageJob` olarak kuyruklanır (paralel çalışabilsin,
+ * tek bir job'un tüm sayfaları çekmeye çalışırken zaman aşımına uğrama
+ * riski olmasın). `totalPages` bu class tarafından hesaplanır ki
+ * coordinator provider'ın sayfa boyutunu hiç bilmek zorunda kalmasın.
  */
 class DummyJsonProvider implements ProviderClientInterface
 {
@@ -21,30 +26,27 @@ class DummyJsonProvider implements ProviderClientInterface
     }
 
     /**
-     * `GET /products?limit=&skip=` ile tüm sayfaları dolaşıp normalize
-     * edilmiş ürünleri tek bir Collection'da toplar.
+     * `GET /products?limit=&skip=` ile tek bir sayfayı çeker, normalize eder
+     * ve provider'ın rapor ettiği `total`'dan toplam sayfa sayısını hesaplar.
      */
-    public function fetchAll(): Collection
+    public function fetchPage(int $page): ProviderPage
     {
         $baseUrl = config('sync.providers.dummyjson.base_url');
-        $products = collect();
-        $skip = 0;
-        $total = 0;
 
-        do {
-            $response = $this->http->get("{$baseUrl}/products", [
-                'limit' => self::PAGE_SIZE,
-                'skip' => $skip,
-            ]);
+        $response = $this->http->get("{$baseUrl}/products", [
+            'limit' => self::PAGE_SIZE,
+            'skip' => $page * self::PAGE_SIZE,
+        ]);
 
-            $batch = collect($response['products'] ?? []);
-            $products = $products->merge($batch->map(fn (array $item) => $this->normalize($item)));
+        $items = collect($response['products'] ?? [])
+            ->map(fn (array $item) => $this->normalize($item))
+            ->values()
+            ->all();
 
-            $total = (int) ($response['total'] ?? 0);
-            $skip += self::PAGE_SIZE;
-        } while ($skip < $total);
+        $total = (int) ($response['total'] ?? 0);
+        $totalPages = max(1, (int) ceil($total / self::PAGE_SIZE));
 
-        return $products->values();
+        return new ProviderPage(items: $items, totalPages: $totalPages);
     }
 
     /**

@@ -2,74 +2,73 @@
 
 namespace App\Services\Sync;
 
-use App\DTOs\SyncResult;
 use App\Enums\ProviderType;
 use App\Models\Product;
-use App\Services\Providers\ProviderFactory;
+use Carbon\CarbonInterface;
 use Illuminate\Support\Facades\DB;
 
 /**
- * Bir provider için hash-bazlı delta senkronizasyonu yapar: provider'dan
- * gelen güncel liste ile DB'deki mevcut kayıtları `external_id` üzerinden
- * eşleştirip yeni/değişen/silinen ürünleri tespit eder ve tek bir
- * `DB::transaction()` içinde uygular (idempotency + tutarlılık garantisi).
+ * Tek bir sayfalık normalize edilmiş ürün listesini hash-bazlı olarak DB'ye
+ * upsert eder (ekle/güncelle/değişmediyse sadece `last_synced_at`'i tazele).
+ *
+ * **SİLME MANTIĞI BİLEREK BURADA YOK.** Eskiden (tek job'lu mimaride) bu
+ * servis TÜM uzak listeyi görüp DB'de karşılığı olmayanları tek seferde
+ * soft-delete edebiliyordu. Artık senkronizasyon `SyncRunCoordinator`
+ * tarafından sayfa başına bir `FetchProviderPageJob`'a bölündüğü için, HİÇBİR
+ * TEK ÇAĞRI uzak listenin TAMAMINI görmüyor — sadece kendi sayfasını. Silme
+ * tespiti bu yüzden bir "mark-and-sweep" ile `SyncRunCoordinator`'ın TÜM
+ * sayfa job'ları bittikten SONRA çalıştırdığı ayrı bir adıma taşındı: her
+ * upsert `last_synced_at`'i bu sync run'a özel SABİT bir zaman damgasıyla
+ * (`$syncRunStartedAt`, her item için değil, tüm run için aynı) işaretler;
+ * run tamamlanınca bu damgadan daha eski `last_synced_at`'e sahip ürünler
+ * ("bu run'da hiçbir sayfa tarafından dokunulmadı" demektir) silinir.
  */
 class DeltaSyncService
 {
-    public function __construct(
-        private readonly ProviderFactory $providerFactory,
-        private readonly HashService $hashService,
-    ) {
+    public function __construct(private readonly HashService $hashService)
+    {
     }
 
     /**
-     * Verilen provider'ı senkronize eder:
-     * 1. Provider'dan tüm ürünleri çeker (HTTP hataları burada, transaction
-     *    başlamadan önce fırlar — DB'ye yarım bir sync yazılmaz).
-     * 2. DB'deki mevcut kayıtları (soft-delete edilmiş olanlar dahil)
-     *    `external_id`'ye göre indeksler.
-     * 3. Her uzak ürün için: DB'de yoksa ekler; soft-delete edilmişse geri
-     *    getirir; hash'i değiştiyse günceller; değişmediyse sadece
-     *    `last_synced_at`'i tazeler.
-     * 4. DB'de olup uzak listede artık bulunmayan (ve henüz silinmemiş)
-     *    ürünleri soft-delete eder.
+     * Verilen sayfadaki her normalize edilmiş item'ı upsert eder. Her item
+     * kendi `DB::transaction()`'ı içinde, satır kilidiyle (`lockForUpdate`)
+     * işlenir — aynı `external_id`'ye iki farklı sayfa job'unun aynı anda
+     * dokunması teorik olarak mümkün değildir (sayfalar ayrık ürün
+     * kümeleridir), ama satır kilidi yine de ucuz bir güvenlik payıdır.
      *
-     * Aynı sync iki kez çalıştırılsa bile (idempotency) DB'de duplicate
-     * kayıt oluşmaz — unique constraint + bu eşleştirme mantığı sayesinde.
+     * @param  array<int, array{external_id: string, name: string, price: float, stock: int, description: string}>  $items
+     * @return array{added: int, updated: int}
      */
-    public function sync(ProviderType $provider): SyncResult
+    public function upsertPage(ProviderType $provider, array $items, CarbonInterface $syncRunStartedAt): array
     {
-        $remoteProducts = $this->providerFactory->make($provider)->fetchAll()->keyBy('external_id');
-
         $added = 0;
         $updated = 0;
-        $deleted = 0;
 
-        DB::transaction(function () use ($provider, $remoteProducts, &$added, &$updated, &$deleted) {
-            $existing = Product::withTrashed()
-                ->where('provider_type', $provider)
-                ->get()
-                ->keyBy('external_id');
+        foreach ($items as $item) {
+            $hash = $this->hashService->hash($item);
 
-            foreach ($remoteProducts as $externalId => $item) {
-                $hash = $this->hashService->hash($item);
-                $current = $existing->get($externalId);
+            DB::transaction(function () use ($provider, $item, $hash, $syncRunStartedAt, &$added, &$updated) {
+                $current = Product::withTrashed()
+                    ->where('provider_type', $provider)
+                    ->where('external_id', $item['external_id'])
+                    ->lockForUpdate()
+                    ->first();
 
                 if ($current === null) {
                     Product::create([
                         'provider_type' => $provider,
-                        'external_id' => $externalId,
+                        'external_id' => $item['external_id'],
                         'name' => $item['name'],
                         'price' => $item['price'],
                         'stock' => $item['stock'],
                         'description' => $item['description'],
                         'data_hash' => $hash,
-                        'last_synced_at' => now(),
+                        'last_synced_at' => $syncRunStartedAt,
                     ]);
 
                     $added++;
 
-                    continue;
+                    return;
                 }
 
                 // Ürün daha önce soft-delete edilmişse (provider'da kaybolmuştu) ve şimdi tekrar
@@ -86,28 +85,17 @@ class DeltaSyncService
                         'stock' => $item['stock'],
                         'description' => $item['description'],
                         'data_hash' => $hash,
-                        'last_synced_at' => now(),
+                        'last_synced_at' => $syncRunStartedAt,
                     ]);
 
                     $updated++;
                 } else {
-                    // İçerik değişmedi; yine de "en son ne zaman görüldü" bilgisini güncelle.
-                    $current->forceFill(['last_synced_at' => now()])->save();
+                    // İçerik değişmedi; yine de "bu run'da görüldü" damgasını işle (sweep adımı için).
+                    $current->forceFill(['last_synced_at' => $syncRunStartedAt])->save();
                 }
-            }
+            });
+        }
 
-            // DB'de olup uzak listede artık karşılığı olmayan external_id'ler = provider'da silinmiş ürünler.
-            $missingExternalIds = $existing->keys()->diff($remoteProducts->keys());
-
-            // whereNull('deleted_at'): zaten soft-delete edilmiş bir ürünü tekrar "silindi" saymamak için.
-            $deleted = Product::where('provider_type', $provider)
-                ->whereIn('external_id', $missingExternalIds)
-                ->whereNull('deleted_at')
-                ->get()
-                ->each(fn (Product $product) => $product->delete())
-                ->count();
-        });
-
-        return new SyncResult($added, $updated, $deleted);
+        return ['added' => $added, 'updated' => $updated];
     }
 }

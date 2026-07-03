@@ -14,11 +14,13 @@ class Kernel extends ConsoleKernel
      * `SyncProviderJob`'ı kuyruğa ekleyecek şekilde scheduler'ı tanımlar.
      * İki provider birbirinden bağımsız zamanlanır; aynı anda çakışsalar
      * bile aralarında bir engelleme yok — sadece AYNI provider için
-     * `ShouldBeUnique` kilidi devreye girer (bkz. SyncProviderJob).
+     * `SyncRunCoordinator`'ın kilidi devreye girer (bkz. o class ve
+     * SyncProviderJob'ın PHPDoc'u).
      *
-     * Bilinçli olarak `withoutOverlapping()` KULLANILMADI: iş zaten job
-     * seviyesinde tekilleştiriliyor, scheduler seviyesinde ikinci bir kilit
-     * mekanizması eklemek yanlış katmanda çözüm/karmaşıklık olurdu.
+     * Bilinçli olarak `withoutOverlapping()` KULLANILMADI: iş zaten
+     * coordinator seviyesinde tekilleştiriliyor, scheduler seviyesinde
+     * ikinci bir kilit mekanizması eklemek yanlış katmanda çözüm/karmaşıklık
+     * olurdu.
      */
     protected function schedule(Schedule $schedule): void
     {

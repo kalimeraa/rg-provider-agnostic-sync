@@ -17,7 +17,7 @@ use Illuminate\Support\Facades\DB;
 /**
  * Sync tetikleme, durum/geçmiş görüntüleme ve failed-job retry
  * endpoint'lerini barındırır. İş mantığının tamamı zaten
- * SyncProviderJob/DeltaSyncService'te — bu controller sadece
+ * SyncProviderJob/SyncRunCoordinator'da — bu controller sadece
  * request → job/sorgu → response çevirisi yapar (ince controller).
  */
 class SyncController extends Controller
@@ -27,10 +27,10 @@ class SyncController extends Controller
     /**
      * `POST /api/sync/trigger` — verilen provider için manuel bir
      * `SyncProviderJob` dispatch eder. Provider için zaten aktif bir sync
-     * varsa `ShouldBeUnique` kilidi yüzünden bu dispatch sessizce
-     * kuyruğa girmez (job çalışmaz) — ama endpoint yine de 202 döner,
-     * çünkü "kabul edildi/kuyruğa alınmaya çalışıldı" anlamındadır; gerçek
-     * durumu `GET /api/sync/status` gösterir.
+     * run'ı varsa `SyncRunCoordinator`'ın kilidi yüzünden bu dispatch
+     * sessizce hiçbir şey yapmaz (bkz. o class'ın PHPDoc'u) — ama endpoint
+     * yine de 202 döner, çünkü "kabul edildi/kuyruğa alınmaya çalışıldı"
+     * anlamındadır; gerçek durumu `GET /api/sync/status` gösterir.
      */
     public function trigger(TriggerSyncRequest $request): JsonResponse
     {

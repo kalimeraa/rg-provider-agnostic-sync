@@ -3,14 +3,17 @@
 namespace App\Services\Providers;
 
 use App\Contracts\ProviderClientInterface;
+use App\DTOs\ProviderPage;
 use App\Services\Sync\ThrottledHttpClient;
-use Illuminate\Support\Collection;
 
 /**
  * FakeStore API (https://fakestoreapi.com/products) için
  * ProviderClientInterface implementasyonu. DummyJSON'dan farklı olarak bu
  * API sayfalama yapmaz — `GET /products` düz bir JSON array olarak tüm
- * ürünleri (şu an 20 adet) tek seferde döner.
+ * ürünleri (şu an 20 adet) tek seferde döner. Bu yüzden `fetchPage()` için
+ * tek bir "sayfa" (page 0) her zaman TÜM veriyi içerir ve `totalPages`
+ * daima 1'dir — SyncRunCoordinator bu provider için hep tek bir
+ * `FetchProviderPageJob` kuyruklar.
  */
 class FakeStoreProvider implements ProviderClientInterface
 {
@@ -20,15 +23,25 @@ class FakeStoreProvider implements ProviderClientInterface
 
     /**
      * `GET /products` ile (sayfalama olmadan) tüm ürünleri tek seferde
-     * çekip normalize eder.
+     * çekip normalize eder. `$page` parametresi göz ardı edilir (her zaman
+     * tüm veri tek "sayfa"dır); 0'dan farklı bir `$page` çağrılırsa boş
+     * döner (SyncRunCoordinator zaten `totalPages=1` gördüğü için hiçbir
+     * zaman `$page > 0` ile çağırmaz — bu sadece savunma amaçlı).
      */
-    public function fetchAll(): Collection
+    public function fetchPage(int $page): ProviderPage
     {
+        if ($page > 0) {
+            return new ProviderPage(items: [], totalPages: 1);
+        }
+
         $baseUrl = config('sync.providers.fakestore.base_url');
 
-        $items = collect($this->http->get("{$baseUrl}/products"));
+        $items = collect($this->http->get("{$baseUrl}/products"))
+            ->map(fn (array $item) => $this->normalize($item))
+            ->values()
+            ->all();
 
-        return $items->map(fn (array $item) => $this->normalize($item))->values();
+        return new ProviderPage(items: $items, totalPages: 1);
     }
 
     /**

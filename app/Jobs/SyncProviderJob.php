@@ -3,10 +3,9 @@
 namespace App\Jobs;
 
 use App\Enums\ProviderType;
-use App\Models\SyncLog;
-use App\Services\Sync\DeltaSyncService;
+use App\Services\Alerts\AlertService;
+use App\Services\Sync\SyncRunCoordinator;
 use Illuminate\Bus\Queueable;
-use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
@@ -14,17 +13,24 @@ use Illuminate\Queue\SerializesModels;
 use Throwable;
 
 /**
- * Bir provider için tek bir delta sync çalıştırır. Uniqueness provider
- * bazlıdır (job invocation bazlı değil): bir DummyJSON sync'i çalışırken
- * ikinci bir DummyJSON sync'i kuyruğa alınamaz/başlatılamaz, ama bir
- * FakeStore sync'i aynı anda gayet rahat çalışabilir.
+ * Scheduler'ın (ve manuel `/api/sync/trigger`'ın) dispatch ettiği ince
+ * orkestrasyon job'u. Asıl iş `SyncRunCoordinator::start()`'ta: provider
+ * kilidini alır, sayfaları öğrenir ve gerçek işi yapan
+ * `FetchProviderPageJob`'lardan oluşan bir `Bus::batch()` dispatch eder —
+ * bu job kendisi batch'in bitmesini BEKLEMEZ, sadece onu tetikleyip döner.
  *
- * Her deneme (retry'lar dahil) kendi SyncLog satırını yazar; böylece sync
- * geçmişinde hangi denemenin başarısız olduğu, hangisinin sonunda başarılı
- * olduğu ayrı ayrı görülebilir — retry'lar arasında tek bir satır sessizce
- * üzerine yazılmaz.
+ * Artık `ShouldBeUnique` DEĞİL: uniqueness artık bu job'un kendi ömrüne
+ * değil, tetiklediği TÜM batch'in ömrüne yayılmalı — bu yüzden kilit
+ * `SyncRunCoordinator` içinde elle (`Cache::lock`) yönetiliyor (bkz. o
+ * class'ın PHPDoc'u).
+ *
+ * `tries`/`backoff`/`failed()` burada sadece "sayfaları öğrenmek için
+ * yapılan ilk istek (page 0) başarısız oldu" senaryosunu kapsar — bir
+ * sayfa job'unun batch içinde kalıcı olarak başarısız olması ayrı bir yoldan
+ * (`SyncRunCoordinator::finishWithFailure()`, batch'in `catch()` callback'i
+ * üzerinden) ele alınır, burada TEKRAR işlenmez.
  */
-class SyncProviderJob implements ShouldQueue, ShouldBeUnique
+class SyncProviderJob implements ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
@@ -43,59 +49,18 @@ class SyncProviderJob implements ShouldQueue, ShouldBeUnique
         $this->onQueue('product-sync');
     }
 
-    /**
-     * Kilit anahtarı olarak sadece provider değeri kullanılır — hangi job
-     * payload'ının tetiklediğinden bağımsız olarak, provider başına aktif
-     * tek bir sync olur.
-     */
-    public function uniqueId(): string
+    public function handle(SyncRunCoordinator $coordinator): void
     {
-        return $this->provider->value;
+        $coordinator->start($this->provider);
     }
 
     /**
-     * Kilidin en fazla ne kadar (saniye) tutulacağı — bir worker job'u
-     * bitirmeden ölürse kilidin sonsuza dek asılı kalmaması için bir üst sınır
-     * (config('sync.job_unique_for'), varsayılan 900 saniye).
+     * Sadece `handle()`'ın kendisi (yani "page 0'ı öğren + batch'i
+     * dispatch et" adımı) `tries` hakkının tamamını tüketip kalıcı olarak
+     * başarısız olursa Laravel tarafından bir kez çağrılır.
      */
-    public function uniqueFor(): int
+    public function failed(Throwable $exception): void
     {
-        return (int) config('sync.job_unique_for', 900);
-    }
-
-    /**
-     * Asıl iş burada: önce "running" durumunda bir SyncLog satırı açar,
-     * DeltaSyncService'i çalıştırır, sonucu (added/updated/deleted) aynı
-     * satıra yazar. Hata olursa satırı "failed" olarak işaretleyip hatayı
-     * tekrar fırlatır — böylece Laravel'in kendi retry/backoff mekanizması
-     * (tries/backoff) devreye girer.
-     */
-    public function handle(DeltaSyncService $service): void
-    {
-        $log = SyncLog::create([
-            'provider_type' => $this->provider,
-            'started_at' => now(),
-            'status' => 'running',
-        ]);
-
-        try {
-            $result = $service->sync($this->provider);
-
-            $log->update([
-                'completed_at' => now(),
-                'status' => 'completed',
-                'products_added' => $result->added,
-                'products_updated' => $result->updated,
-                'products_deleted' => $result->deleted,
-            ]);
-        } catch (Throwable $e) {
-            $log->update([
-                'completed_at' => now(),
-                'status' => 'failed',
-                'error_message' => $e->getMessage(),
-            ]);
-
-            throw $e;
-        }
+        app(AlertService::class)->recordSyncFailure($this->provider);
     }
 }

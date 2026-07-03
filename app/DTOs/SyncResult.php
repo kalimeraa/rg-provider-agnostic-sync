@@ -3,9 +3,11 @@
 namespace App\DTOs;
 
 /**
- * DeltaSyncService::sync()'in dönüş değeri. Servis katmanından job/controller
- * katmanına çıplak bir array yerine tip güvenli bir değer geçmek için
- * kullanılan DTO — SyncProviderJob bunu doğrudan SyncLog kolonlarına yazar.
+ * Bir sync run'ının (tüm sayfa job'ları + sweep-delete adımı bitince)
+ * nihai özeti. `SyncRunCoordinator::finishSuccessfully()` bunu, sayfa
+ * job'larının Redis'te biriktirdiği added/updated sayaçlarıyla ve
+ * sweep-delete'in bulduğu deleted sayısıyla oluşturup doğrudan `SyncLog`
+ * kolonlarına yazar.
  */
 final class SyncResult
 {

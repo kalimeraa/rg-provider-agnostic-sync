@@ -2,24 +2,20 @@
 
 namespace App\Providers;
 
-use App\Services\Sync\ThrottledHttpClient;
 use Illuminate\Support\ServiceProvider;
 
+/**
+ * `ThrottledHttpClient` artık burada `bind()` edilmiyor: client'ın
+ * pacing/circuit-breaker durumu provider'a göre değişen bir `$providerKey`
+ * ile Redis'te paylaşılıyor (bkz. o class'ın PHPDoc'u), bu yüzden
+ * `ProviderFactory` onu doğrudan, hangi provider için üretildiğini bilerek
+ * inşa ediyor — generic bir container binding'i bu bilgiyi taşıyamazdı.
+ */
 class AppServiceProvider extends ServiceProvider
 {
-    /**
-     * ThrottledHttpClient'ı config'ten okunan rate-limit/circuit-breaker
-     * değerleriyle `bind()` eder (singleton DEĞİL — her `make()` çağrısında
-     * taze bir instance üretilir ki `consecutiveFailures` sayacı her sync
-     * çalıştırmasında sıfırdan başlasın). Bu sayede DummyJsonProvider/
-     * FakeStoreProvider constructor'larına otomatik enjekte edilir.
-     */
     public function register(): void
     {
-        $this->app->bind(ThrottledHttpClient::class, fn () => new ThrottledHttpClient(
-            requestsPerSecond: (int) config('sync.rate_limit_per_second', 5),
-            maxConsecutiveFailures: (int) config('sync.max_consecutive_failures', 5),
-        ));
+        //
     }
 
     /**
