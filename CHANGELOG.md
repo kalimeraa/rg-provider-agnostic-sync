@@ -45,6 +45,20 @@ düzeltildi"yi anlatır.
   mevcut tasarımın NEDEN'ini anlatacak şekilde sadeleştirildi. Kronoloji/
   hata-avı anlatımı zaten burada, CHANGELOG'da duruyor.
 
+## Sonradan yapılan iyileştirmeler (Faz 8 sonrası)
+
+- **Dashboard'a "Logları Sil" + sayfalama:** `DELETE /api/sync/history`
+  (`status != running` olan satırları siler, aktif bir run'ınki korunur)
+  eklendi; yeni `SyncHistoryCleared` event'i aynı `sync-status` kanalında
+  yayınlanıyor, böylece dashboard'u açık tutan HERKES (sadece butona basan
+  sekme değil) anında boş tabloya döner — gerçek bir Node.js WebSocket
+  client'ıyla canlı doğrulandı. Sync Geçmişi tablosu artık gerçekten
+  sayfalanıyor (10'lu, Önceki/Sonraki); canlı sync güncellemeleri sadece
+  1. sayfadayken (en yeni kayıtlar) görünümü değiştiriyor, kullanıcı daha
+  eski bir sayfaya bakarken görünüm aniden değişmiyor. Bu, case'in 7
+  zorunlu endpoint'ine ek 8. bir endpoint — README/Postman'e buna göre
+  not düşüldü.
+
 ## Faz 7 — Test Katmanı: iki önemli hata canlı testlerle bulundu
 
 61 test (Unit + Feature + integration/E2E) yazıldı, coverage **%78.26**

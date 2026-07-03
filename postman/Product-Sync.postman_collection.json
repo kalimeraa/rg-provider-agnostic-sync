@@ -1,7 +1,7 @@
 {
 	"info": {
 		"name": "Product Sync API",
-		"description": "DummyJSON + FakeStore delta sync sistemi için case'in istediği 7 endpoint. Tüm response'lar ApiResponseTrait zarfını kullanır: {success, data, meta, message} / {success:false, error:{code, message}}. Ayrıntılı mimari/karar dokümantasyonu için README.md'ye bakın. base_url environment değişkeni varsayılan http://localhost:8080 — .env'inizde APP_PORT değiştirdiyseniz environment'ta da güncelleyin.",
+		"description": "DummyJSON + FakeStore delta sync sistemi için case'in istediği 7 endpoint + dashboard'un 'Logları Sil' butonu için eklenen 1 ekstra endpoint (DELETE /api/sync/history). Tüm response'lar ApiResponseTrait zarfını kullanır: {success, data, meta, message} / {success:false, error:{code, message}}. Ayrıntılı mimari/karar dokümantasyonu için README.md'ye bakın. base_url environment değişkeni varsayılan http://localhost:8080 — .env'inizde APP_PORT değiştirdiyseniz environment'ta da güncelleyin.",
 		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
 	},
 	"variable": [
@@ -101,6 +101,22 @@
 							]
 						},
 						"description": "Geçmiş sync_logs kayıtları, en yeniden eskiye, sayfalı (meta: page/per_page/total)."
+					},
+					"response": []
+				},
+				{
+					"name": "Clear Sync History",
+					"request": {
+						"method": "DELETE",
+						"header": [
+							{ "key": "Accept", "value": "application/json" }
+						],
+						"url": {
+							"raw": "{{base_url}}/api/sync/history",
+							"host": ["{{base_url}}"],
+							"path": ["api", "sync", "history"]
+						},
+						"description": "Case'in şemasında yok, dashboard'un 'Logları Sil' butonu için eklendi. status != running olan sync_logs satırlarını siler (aktif bir run'ın satırı korunur) ve SyncHistoryCleared event'ini sync-status kanalında yayınlar."
 					},
 					"response": []
 				},

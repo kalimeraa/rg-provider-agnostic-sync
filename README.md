@@ -376,6 +376,7 @@ Tüm endpoint'ler `ApiResponseTrait` zarfını kullanır:
 | `POST` | `/api/sync/trigger` | Body: `{"provider":"dummyjson"\|"fakestore"}`. Manuel sync başlatır (202). Zaten aktif bir run varsa sessizce yutulur. |
 | `GET` | `/api/sync/status` | Her iki provider için: şu an çalışıyor mu + son biten/başarısız sync bilgisi. |
 | `GET` | `/api/sync/history` | `?provider=&per_page=` — geçmiş `sync_logs`, en yeniden eskiye, sayfalı. |
+| `DELETE` | `/api/sync/history` | Case'in şemasında yok, dashboard'un "Logları Sil" butonu için eklendi — `status != running` olan geçmiş kayıtları temizler (aktif bir run'ın satırı korunur). |
 | `GET` | `/api/sync/failed-jobs` | `?per_page=` — `failed_jobs` tablosu, sayfalı. |
 | `POST` | `/api/sync/retry/{uuid}` | `{uuid}` = `failed_jobs.uuid` (numeric id DEĞİL). Job'u kuyruğa geri koyar. |
 | `GET` | `/api/products` | `?provider=&per_page=` — local, aktif (silinmemiş) ürünler, sayfalı. |
@@ -391,7 +392,7 @@ curl "http://localhost:8080/api/products?provider=dummyjson&per_page=5" | jq
 ### Postman collection
 
 [`postman/Product-Sync.postman_collection.json`](postman/Product-Sync.postman_collection.json)
-— yukarıdaki 7 endpoint'in tamamı, gruplu (Sync/Products/Health) ve
+— yukarıdaki 8 endpoint'in tamamı, gruplu (Sync/Products/Health) ve
 açıklamalı. [`postman/Product-Sync.postman_environment.json`](postman/Product-Sync.postman_environment.json)
 ile birlikte Postman'e import edin; `base_url` (varsayılan `:8080`, §2'deki
 port notuna göre ayarlayın) ve `failed_job_uuid` (bir failed job'ın `uuid`'si
@@ -407,10 +408,16 @@ yenilenmeden (**sıfır polling**) şunlar canlı güncellenir:
 - Her iki provider'ın "çalışıyor / son sync" durumu.
 - Sync history tablosu (yeni satır eklenmez — provider+başlangıç zamanına
   göre eşleşip mevcut satır güncellenir, dublicate satır oluşmaz).
+  10'lu sayfalanır (Önceki/Sonraki); canlı güncellemeler sadece 1.
+  sayfadayken (en yeni kayıtlar) görünümü değiştirir.
+- "Logları Sil" butonu — `DELETE /api/sync/history`'yi çağırır; aktif bir
+  run varsa onun satırı korunur. Sonuç, isteği atan sekmeyle sınırlı
+  kalmaz: dashboard'u açık tutan HERKES aynı anda 1. sayfaya/boş tabloya
+  döner (bkz. aşağıdaki "Nasıl").
 - Failed jobs listesi + retry butonları.
 
-**Nasıl:** `app/Events/SyncStatusUpdated.php` ve
-`app/Events/FailedJobRecorded.php`, `ShouldBroadcastNow` ile `sync-status`
+**Nasıl:** `app/Events/SyncStatusUpdated.php`, `app/Events/FailedJobRecorded.php`
+ve `app/Events/SyncHistoryCleared.php`, `ShouldBroadcastNow` ile `sync-status`
 kanalına yayın yapar (Laravel Reverb sunucusu, `docker-compose.yml`'deki
 ayrı `reverb` container'ı). `resources/views/dashboard.blade.php`, ayrı
 dosyalardaki `public/js/dashboard.js`/`public/css/dashboard.css`'i
